@@ -11,8 +11,11 @@
     2. Символические ссылки (ключ -Link)
        В %APPDATA%\mpv создаются ссылки на файлы репозитория. После git pull mpv
        сразу видит новую версию, повторно запускать скрипт не нужно.
-       Требует включённого «Режима разработчика» Windows
-       (Параметры → Система → Для разработчиков) или запуска PowerShell от администратора.
+       Нужен ОДИН из вариантов:
+       - включён «Режим разработчика» Windows
+         (Параметры → Система → Для разработчиков → Режим разработчика), или
+       - PowerShell запущен от имени администратора.
+       Скрипт сначала проверяет, можно ли создавать ссылки, и ничего не меняет, если нельзя.
        Папку репозитория после этого нельзя перемещать или удалять — ссылки сломаются.
 
     В обоих режимах:
@@ -48,12 +51,36 @@ $dst    = Join-Path $env:APPDATA "mpv"
 $stamp  = Get-Date -Format "yyyyMMdd-HHmmss"
 $backup = Join-Path $dst "_backup_$stamp"
 
+# Символическая ссылка через mklink: в отличие от New-Item в Windows PowerShell 5.1,
+# mklink работает без прав администратора, если включён «Режим разработчика».
+function New-Symlink($path, $target) {
+    $out = & cmd /c "mklink `"$path`" `"$target`" 2>&1"
+    if ($LASTEXITCODE -ne 0) { throw "mklink: $out" }
+}
+
 function Backup-File($path) {
     $rel = $path.Substring($dst.Length).TrimStart('\')
     $target = Join-Path $backup $rel
     New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
     Move-Item -Force $path $target
     Write-Host "  сохранено в бэкап: $rel"
+}
+
+# Режим ссылок: сначала проверить, что ссылки вообще можно создавать, — ДО любых изменений
+if ($Link) {
+    $probe = Join-Path $env:TEMP "camera_triage_linktest_$stamp"
+    try { New-Symlink $probe (Join-Path $PSScriptRoot "README.md") } catch { }
+    if (Test-Path $probe) {
+        Remove-Item -Force $probe
+    } else {
+        Write-Host "Нельзя создать символические ссылки — ничего не изменено." -ForegroundColor Red
+        Write-Host "Варианты:"
+        Write-Host "  - включить «Режим разработчика»: Параметры → Система → Для разработчиков,"
+        Write-Host "    затем снова .\install.ps1 -Link"
+        Write-Host "  - или запустить PowerShell от имени администратора и повторить"
+        Write-Host "  - или поставить копиями: .\install.ps1"
+        exit 1
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $dst | Out-Null
@@ -66,25 +93,28 @@ foreach ($old in @("scripts\gopro_triage.lua", "script-opts\gopro_triage.conf"))
 
 Get-ChildItem -Path $src -Recurse -File | ForEach-Object {
     $rel    = $_.FullName.Substring($src.Length).TrimStart('\')
+    $source = $_.FullName
     $target = Join-Path $dst $rel
     New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
 
     if (Test-Path $target) {
-        $item = Get-Item $target
-        $isLinkToUs = $item.LinkType -eq "SymbolicLink" -and $item.Target -contains $_.FullName
-        if ($isLinkToUs) { Write-Host "= $rel (ссылка уже есть)"; return }
-        if (-not $Link -and -not $item.LinkType -and
-            (Get-FileHash $target).Hash -eq (Get-FileHash $_.FullName).Hash) {
-            Write-Host "= $rel (без изменений)"; return
+        $item = Get-Item -Force $target
+        if ($item.LinkType) {
+            if ($Link -and ($item.Target -contains $source)) { Write-Host "= $rel (ссылка уже есть)"; return }
+            Remove-Item -Force $target                     # старая/чужая ссылка — заменить
+        } elseif ((Get-FileHash $target).Hash -eq (Get-FileHash $source).Hash) {
+            if (-not $Link) { Write-Host "= $rel (без изменений)"; return }
+            Remove-Item -Force $target                     # та же копия — бэкап не нужен
+        } else {
+            Backup-File $target                            # отличается — в бэкап
         }
-        if ($item.LinkType) { Remove-Item -Force $target } else { Backup-File $target }
     }
 
     if ($Link) {
-        New-Item -ItemType SymbolicLink -Path $target -Target $_.FullName | Out-Null
+        New-Symlink $target $source
         Write-Host "→ $rel (ссылка)"
     } else {
-        Copy-Item -Force $_.FullName $target
+        Copy-Item -Force $source $target
         Write-Host "+ $rel"
     }
 }
