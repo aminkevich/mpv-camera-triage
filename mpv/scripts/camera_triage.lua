@@ -1,5 +1,5 @@
 -- camera_triage.lua — быстрая ручная разметка (триаж) футажа экшн-камер в mpv
--- Версия 3.1. Нужна mpv 0.38 или новее.
+-- Версия 3.2. Нужна mpv 0.38 или новее.
 -- Работает с любыми видео. Понимает прокси низкого разрешения: GoPro .LRV и DJI .LRF
 -- (можно смотреть их вместо тяжёлых MP4), для GoPro — имена глав (GX01…).
 --
@@ -11,13 +11,15 @@
 --   j t x r     jump / trick / crash / ride
 --   i  o        начало / конец клипа (метка, нажатая между i и o, становится меткой клипа)
 --   n           заметка к моменту           N  заметка к файлу
+--               (после отмены заметки через u её текст подставится в следующую n / N —
+--                так заметку легко перенести в другое место; в поле ввода работает Ctrl+V)
 --   0 1 2 3     оценка файла (0 мусор … 3 топ)
 --   ENTER       файл просмотрен → записать оценку → следующий НЕпросмотренный
 --               (открытый клип при этом закрывается в текущей позиции)
 --   u           отменить: открытый клип (i) — сразу; запись в CSV — после подтверждения (u ещё раз)
 --   + -         скорость ×2 / ÷2       TAB  1x ↔ быстро       BACKSPACE  1x
 --   PgUp PgDn   прыжок к предыдущей / следующей метке (метки видны засечками на полосе прокрутки)
---   a           сменить активность     F1   подсказка вкл/выкл    F11  полный экран
+--   a           сменить активность (запоминается в CSV папки)   F1 подсказка   F11 полный экран
 --   L           переключить оригинал ↔ прокси (LRV/LRF) для текущего и следующих файлов
 --
 -- Статус (файл, оценка, метки, скорость ≠ 1x) постоянно виден в правом верхнем углу.
@@ -85,6 +87,8 @@ local skip_set = {}
 for e in o.skip_exts:gmatch("[^,%s]+") do skip_set[e:lower()] = true end
 
 local activity = o.activity
+local activity_dir = nil   -- папка, для которой активность уже выбрана
+local undone_note = nil    -- текст последней отменённой заметки (подставится в следующую)
 local cur = nil        -- текущий файл
 local index = {}       -- [dir] = { done, rating, marks (кол-во), points (список) }; ключ — имя MP4 в верхнем регистре
 local written = {}     -- стек записей этой сессии для undo: { path = ..., dir = ... }
@@ -229,7 +233,8 @@ end
 
 local function load_index(dir, force)
     if index[dir] and not force then return index[dir] end
-    local ix = { done = {}, rating = {}, marks = {}, notes = {}, points = {}, bad = false }
+    local ix = { done = {}, rating = {}, marks = {}, notes = {}, points = {}, bad = false,
+                 activity = nil, activity_at = "" }
     index[dir] = ix
     local path = utils.join_path(dir, o.csv_name)
     if header_state(path) == false then ix.bad = true; return ix end
@@ -245,6 +250,9 @@ local function load_index(dir, force)
                 for i, name in ipairs(row) do col[name] = i end
             else
                 local k = (row[col.file] or ""):upper()
+                -- активность папки = активность самой поздней записи (по logged_at, не по порядку строк)
+                local at, act = row[col.logged_at] or "", row[col.activity] or ""
+                if act ~= "" and at >= ix.activity_at then ix.activity, ix.activity_at = act, at end
                 local ev = row[col.event]
                 if ev == "file_done" then
                     ix.done[k] = true
@@ -508,7 +516,7 @@ local function set_rating(n)
     osd("Оценка файла: " .. n .. "  " .. string.rep("★", n) .. "     ENTER — готово")
 end
 
-local function ask_text(prompt, on_text)
+local function ask_text(prompt, on_text, default_text)
     if not has_input then
         osd("Для заметок нужна mpv 0.38 или новее", 4)
         return
@@ -521,6 +529,8 @@ local function ask_text(prompt, on_text)
     local submitted = false
     input.get({
         prompt = prompt .. " ",
+        default_text = default_text,
+        cursor_position = default_text and (#default_text + 1) or nil,
         submit = function(text)
             submitted = true
             input.terminate()
@@ -543,23 +553,27 @@ local function note_moment()
     if not need_file() then return end
     local t = mark_time() or 0
     local file_key = cur.key
+    local prefill = undone_note
     ask_text("Заметка @ " .. hms(t) .. ":", function(text)
+        undone_note = nil
         if not (cur and cur.key == file_key) then return end
         local row = base_row("note", true)
         row.time_ms, row.time_hms, row.note = ms(t), hms(t), text
         if append_row(row) then reload_marks(); osd("✎ " .. text) end
-    end)
+    end, prefill)
 end
 
 local function note_file()
     if not need_file() then return end
     local file_key = cur.key
+    local prefill = undone_note
     ask_text("Заметка к файлу:", function(text)
+        undone_note = nil
         if not (cur and cur.key == file_key) then return end
         local row = base_row("note")      -- без time_ms = заметка ко всему файлу
         row.note = text
         if append_row(row) then reload_marks(); osd("✎ (файл) " .. text) end
-    end)
+    end, prefill)
 end
 
 local undo_armed = nil      -- { line, at }: ждём подтверждения отмены
@@ -606,7 +620,12 @@ local function undo()
             cur.saved_rating = tonumber(index[cur.dir].rating[k] or "")
         end
     end
-    osd("↶ Отменено: " .. what)
+    if r[2] == "note" and (r[11] or "") ~= "" then
+        undone_note = r[11]
+        osd("↶ Отменено: " .. what .. "\nn / N в новом месте — текст подставится", 4)
+    else
+        osd("↶ Отменено: " .. what)
+    end
 end
 
 -- просмотрен ли файл записи плейлиста
@@ -802,6 +821,14 @@ mp.register_event("file-loaded", function()
     local key = file:upper()
     local ix = load_index(dir)
     local dur = mp.get_property_number("duration")
+    local activity_msg = nil
+    if dir ~= activity_dir then
+        activity_dir = dir
+        if ix.activity and ix.activity ~= activity then
+            activity = ix.activity
+            activity_msg = "Активность из _triage.csv этой папки: " .. activity
+        end
+    end
 
     cur = {
         dir = dir, fname = fname, file = file, key = key, src = open_src or ext,
@@ -830,7 +857,10 @@ mp.register_event("file-loaded", function()
             "Переименуй или удали его.", 8)
     else
         local start = mp.get_property_number("time-pos", 0)
-        if start_msg then
+        if activity_msg then
+            osd((start_msg and (start_msg .. "\n") or "") .. activity_msg, 4)
+            start_msg = nil
+        elseif start_msg then
             osd(start_msg, 4)
             start_msg = nil
         elseif start > 1 then

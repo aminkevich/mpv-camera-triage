@@ -61,7 +61,7 @@ install.ps1                       установка в %APPDATA%\mpv (Windows)
 | `u` | отменить (запись в CSV — после повторного `u`) |
 | `+` `-` `Tab` `Backspace` | скорость ×2 / ÷2 / 1x↔быстро / 1x |
 | `PgUp` `PgDn` | к предыдущей / следующей метке |
-| `a` | активность (spearfishing / kitesurfing / other) |
+| `a` | активность (spearfishing / kitesurfing / other); запоминается в CSV папки |
 | `L` | оригинал ↔ прокси низкого разрешения (GoPro .LRV / DJI .LRF) |
 | `F1` | подсказка |
 
