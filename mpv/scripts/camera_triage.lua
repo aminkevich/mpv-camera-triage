@@ -1,5 +1,5 @@
 -- camera_triage.lua — быстрая ручная разметка (триаж) футажа экшн-камер в mpv
--- Версия 3.2. Нужна mpv 0.38 или новее.
+-- Версия 3.3. Нужна mpv 0.38 или новее.
 -- Работает с любыми видео. Понимает прокси низкого разрешения: GoPro .LRV и DJI .LRF
 -- (можно смотреть их вместо тяжёлых MP4), для GoPro — имена глав (GX01…).
 --
@@ -11,8 +11,9 @@
 --   j t x r     jump / trick / crash / ride
 --   i  o        начало / конец клипа (метка, нажатая между i и o, становится меткой клипа)
 --   n           заметка к моменту           N  заметка к файлу
---               (после отмены заметки через u её текст подставится в следующую n / N —
---                так заметку легко перенести в другое место; в поле ввода работает Ctrl+V)
+--               Текст не теряется: если заметку отменить через u или закрыть поле ввода
+--               через Esc, недописанный текст подставится в следующую n / N.
+--               Так заметку легко перенести в другое место. В поле ввода работает Ctrl+V.
 --   0 1 2 3     оценка файла (0 мусор … 3 топ)
 --   ENTER       файл просмотрен → записать оценку → следующий НЕпросмотренный
 --               (открытый клип при этом закрывается в текущей позиции)
@@ -527,10 +528,12 @@ local function ask_text(prompt, on_text, default_text)
         if not was_paused then mp.set_property_bool("pause", false) end
     end
     local submitted = false
+    local draft = default_text or ""          -- последний набранный текст (для Esc)
     input.get({
         prompt = prompt .. " ",
         default_text = default_text,
         cursor_position = default_text and (#default_text + 1) or nil,
+        edited = function(text) draft = text or "" end,
         submit = function(text)
             submitted = true
             input.terminate()
@@ -542,9 +545,17 @@ local function ask_text(prompt, on_text, default_text)
                 osd("✎ Пустая заметка — ничего не записано")
             end
         end,
-        closed = function()
+        closed = function(text)
             restore()
-            if not submitted then osd("✎ Заметка отменена — ничего не записано") end
+            if submitted then return end
+            local t = ((type(text) == "string") and text or draft):gsub("[\r\n]+", " ")
+            if t:match("%S") then
+                undone_note = t     -- черновик: подставится в следующую заметку
+                osd("✎ Заметка не записана — текст сохранён:\n«" .. t .. "»\nn / N в нужном месте вставит его", 4)
+            else
+                undone_note = nil
+                osd("✎ Заметка отменена — ничего не записано")
+            end
         end,
     })
 end
