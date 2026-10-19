@@ -1,6 +1,7 @@
 -- camera_triage.lua — быстрая ручная разметка (триаж) футажа экшн-камер в mpv
--- Версия 3.0. Нужна mpv 0.38 или новее.
--- Работает с любыми видео; для GoPro дополнительно понимает имена глав (GX01…) и LRV-прокси.
+-- Версия 3.1. Нужна mpv 0.38 или новее.
+-- Работает с любыми видео. Понимает прокси низкого разрешения: GoPro .LRV и DJI .LRF
+-- (можно смотреть их вместо тяжёлых MP4), для GoPro — имена глав (GX01…).
 --
 -- Разметка пишется в _triage.csv В ПАПКЕ С ВИДЕО (переезжает в архив вместе с футажом).
 --
@@ -17,6 +18,7 @@
 --   + -         скорость ×2 / ÷2       TAB  1x ↔ быстро       BACKSPACE  1x
 --   PgUp PgDn   прыжок к предыдущей / следующей метке (метки видны засечками на полосе прокрутки)
 --   a           сменить активность     F1   подсказка вкл/выкл    F11  полный экран
+--   L           переключить оригинал ↔ прокси (LRV/LRF) для текущего и следующих файлов
 --
 -- Статус (файл, оценка, метки, скорость ≠ 1x) постоянно виден в правом верхнем углу.
 -- Место в файле запоминается при переходе на другой файл и при выходе (продолжение с того же места).
@@ -40,15 +42,18 @@ local o = {
     activity    = "spearfishing",
     reaction_s  = 0.5,     -- поправка на реакцию (сек реального времени × скорость; на паузе не применяется)
     fast_speed  = 4,       -- скорость для TAB
-    prefer_lrv  = false,   -- true: вместо MP4 открывать лёгкий .LRV (если он есть рядом)
+    prefer_proxy = false,  -- true: вместо MP4 открывать лёгкий прокси (GoPro .LRV / DJI .LRF), если он есть рядом
+    prefer_lrv  = false,   -- устаревшее имя prefer_proxy (v3.0), работает так же
     skip_done   = true,    -- в плейлисте пропускать уже просмотренные файлы
-    skip_exts   = "thm,jpg,jpeg,gpr,dng,wav,csv,txt,md,ini,srt,lrf,xml",
+    skip_exts   = "thm,jpg,jpeg,gpr,dng,wav,csv,txt,md,ini,srt,xml",
     osd_s       = 1.5,
     status_bar  = true,    -- постоянный статус в правом верхнем углу
     show_marks  = true,    -- при просмотре всплывают ранее поставленные метки
     sort_on_exit = true,   -- при выходе сортировать CSV по файлу и времени
 }
 options.read_options(o, "camera_triage")
+local use_proxy = o.prefer_proxy or o.prefer_lrv     -- текущий режим; клавиша L переключает
+local PROXY_EXT = { lrv = true, lrf = true }
 
 local ACTIVITIES = { "spearfishing", "kitesurfing", "other" }
 local LABELS = {
@@ -72,6 +77,7 @@ local HELP = table.concat({
     "+ - скорость   TAB 1x↔быстро   BACKSPACE 1x   a активность",
     "PgUp/PgDn  к предыдущей / следующей метке",
     "Пауза ПРОБЕЛ   Кадр . ,   Перемотка стрелки   < > файлы",
+    "L  оригинал ↔ прокси низкого разрешения (LRV / LRF)",
     "F1 скрыть подсказку   F11 полный экран",
 }, "\n")
 
@@ -139,7 +145,9 @@ local function exists(dir, name)
     return utils.file_info(utils.join_path(dir, name)) ~= nil
 end
 
--- для GL010123.LRV найти GX010123.MP4 / GH010123.MP4
+-- Прокси → оригинал:
+--   GoPro: GL010123.LRV → GX010123.MP4 / GH010123.MP4
+--   DJI и прочие: DJI_20261018_0001_D.LRF → DJI_20261018_0001_D.MP4 (то же имя)
 local function main_file_for(dir, fname)
     local up = fname:upper()
     local ch, num = up:match("^GL(%d%d)(%d%d%d%d)%.LRV$")
@@ -150,21 +158,27 @@ local function main_file_for(dir, fname)
         end
         return "GX" .. ch .. num .. ".MP4"   -- лучшая догадка, если MP4 рядом нет
     end
-    local base = up:match("^(.+)%.LRV$")
-    if base then return base .. ".MP4" end
+    local base = fname:match("^(.+)%.[Ll][Rr][VvFf]$")
+    if base then
+        for _, e in ipairs({ ".MP4", ".mp4", ".MOV", ".mov" }) do
+            if exists(dir, base .. e) then return base .. e end
+        end
+        return base .. ".MP4"
+    end
     return fname
 end
 
--- для GX010123.MP4 найти GL010123.LRV
-local function lrv_for(dir, fname)
+-- Оригинал → прокси, если он лежит рядом (nil — прокси нет):
+--   GoPro: GX010123.MP4 → GL010123.LRV;  DJI и прочие: <имя>.MP4 → <имя>.LRF / <имя>.LRV
+local function proxy_for(dir, fname)
     local up = fname:upper()
     local cands = {}
     local ch, num = up:match("^G[HX](%d%d)(%d%d%d%d)%.MP4$")
     if ch then
         cands = { "GL" .. ch .. num .. ".LRV" }
     else
-        local base = up:match("^(.+)%.MP4$")
-        if base then cands = { base .. ".LRV" } end
+        local base = fname:match("^(.+)%.[MmQq][PpOo][4Vv]$")
+        if base then cands = { base .. ".LRF", base .. ".LRV" } end
     end
     for _, c in ipairs(cands) do
         if exists(dir, c) then return c end
@@ -393,7 +407,8 @@ local function status_lines()
     local count = mp.get_property_number("playlist-count", 1)
     local done = ix.done and ix.done[cur.key]
     local lines = {
-        string.format("[%d/%d]  %s%s", pos, count, cur.file, (cur.src == "lrv") and "  [LRV]" or ""),
+        string.format("[%d/%d]  %s%s", pos, count, cur.file,
+            PROXY_EXT[cur.src] and ("  [" .. cur.src:upper() .. " — прокси]") or ""),
         (done and "✓ просмотрен" or "не просмотрен") ..
             "   оценка " .. (cur.rating and tostring(cur.rating) or "—") ..
             "   меток " .. ((ix.marks and ix.marks[cur.key]) or 0) ..
@@ -597,7 +612,7 @@ end
 -- просмотрен ли файл записи плейлиста
 local function entry_done(filename)
     local _, dir, fname, ext = split(filename)
-    local file = (ext == "lrv") and main_file_for(dir, fname) or fname
+    local file = PROXY_EXT[ext] and main_file_for(dir, fname) or fname
     return load_index(dir).done[file:upper()] == true
 end
 
@@ -684,18 +699,19 @@ end
 
 ---------------------------------------------------------------- playlist / file events
 
--- Что делать с записью плейлиста: "junk" (не видео / дубль LRV), "done" (уже просмотрен), nil (оставить).
+-- Что делать с записью плейлиста: "junk" (не видео / прокси, чей оригинал тоже в списке),
+-- "done" (уже просмотрен), nil (оставить).
 -- in_list — множество полных путей плейлиста (верхний регистр).
 local function entry_kind(p, in_list)
     local path, dir, fname, ext = split(p)
     local info = utils.file_info(path)
     if not info or info.is_dir then return nil end          -- папки mpv раскроет сам
     if skip_set[ext] then return "junk" end
-    if ext == "lrv" then
+    if PROXY_EXT[ext] then
         local main = utils.join_path(dir, main_file_for(dir, fname))
         if in_list[main:upper()] then return "junk" end
     end
-    local file = (ext == "lrv") and main_file_for(dir, fname) or fname
+    local file = PROXY_EXT[ext] and main_file_for(dir, fname) or fname
     if load_index(dir).done[file:upper()] then return "done" end
     return nil
 end
@@ -709,7 +725,8 @@ local pl_sig = nil          -- плейлист, который уже почи�
 local start_msg = nil       -- сообщение при открытии папки (сколько уже просмотрено)
 local skip_current = false  -- текущий файл надо пропустить (уже просмотрен / не видео)
 local skip_to = nil         -- куда перейти вместо текущего
-local open_src = nil        -- "lrv", если вместо MP4 открыт LRV
+local open_src = nil        -- "lrv"/"lrf", если вместо MP4 открыт прокси
+local resume_after_reload = nil  -- переоткрытие по L: { key, t, pause, in_t, in_label }
 
 -- Плейлист чистится ОДИН раз, до открытия файла (а не удалением текущей записи на лету).
 mp.add_hook("on_load", 50, function()
@@ -724,7 +741,7 @@ mp.add_hook("on_load", 50, function()
     if #pl > 1 and playlist_sig(pl) ~= pl_sig then
         local in_list = {}
         for _, e in ipairs(pl) do in_list[full_path(e.filename):upper()] = true end
-        -- 1) убираем только мусор (фото, THM, дубли LRV); просмотренные остаются в списке
+        -- 1) убираем только мусор (фото, THM, прокси при наличии оригинала); просмотренные остаются
         local cur_i = mp.get_property_number("playlist-pos", 0)
         local cur_junk = false
         for i = #pl - 1, 0, -1 do                            -- с конца, чтобы индексы не съезжали
@@ -761,11 +778,11 @@ mp.add_hook("on_load", 50, function()
         end
     end
 
-    if o.prefer_lrv and ext == "mp4" then
-        local lrv = lrv_for(dir, fname)
-        if lrv then
-            mp.set_property("stream-open-filename", utils.join_path(dir, lrv))
-            open_src = "lrv"
+    if use_proxy and (ext == "mp4" or ext == "mov") then
+        local px = proxy_for(dir, fname)
+        if px then
+            mp.set_property("stream-open-filename", utils.join_path(dir, px))
+            open_src = (px:match("%.([^.]+)$") or "lrv"):lower()
         end
     end
 end)
@@ -781,7 +798,7 @@ mp.register_event("file-loaded", function()
         skip_to = nil
         return
     end
-    local file = (ext == "lrv") and main_file_for(dir, fname) or fname
+    local file = PROXY_EXT[ext] and main_file_for(dir, fname) or fname
     local key = file:upper()
     local ix = load_index(dir)
     local dur = mp.get_property_number("duration")
@@ -797,6 +814,17 @@ mp.register_event("file-loaded", function()
     cur.saved_rating = cur.rating
     cur.last_t = 0
     update_chapters()
+    local rr = resume_after_reload
+    resume_after_reload = nil
+    if rr and rr.key == key then
+        -- переоткрыт клавишей L: то же место, та же пауза, открытый клип сохраняется
+        cur.in_t, cur.in_label = rr.in_t, rr.in_label
+        cur.last_t = rr.t
+        mp.commandv("seek", tostring(rr.t), "absolute+exact")
+        mp.set_property_bool("pause", rr.pause)
+        refresh_ui()
+        return
+    end
     if ix.bad then
         osd("⚠ _triage.csv в этой папке в другом формате — запись будет остановлена.\n" ..
             "Переименуй или удали его.", 8)
@@ -835,7 +863,7 @@ mp.register_event("end-file", function()
         msgs[#msgs + 1] = "не отмечен как просмотренный"
     end
     cur = nil
-    if #msgs > 0 then
+    if #msgs > 0 and not resume_after_reload then
         mp.osd_message("⚠ " .. c.file .. ": " .. table.concat(msgs, ", "), 3)
     end
     refresh_ui()
@@ -931,6 +959,26 @@ bind("BS", "speed-reset", function() set_speed(1) end)
 for k, s in pairs({ F2 = 1, F3 = 2, F4 = 4, F5 = 8 }) do
     bind(k, "speed-" .. k, function() set_speed(s) end)
 end
+-- L: переключить оригинал ↔ прокси. Текущий файл переоткрывается с того же места.
+local function toggle_proxy()
+    use_proxy = not use_proxy
+    local msg = use_proxy and "Режим: ПРОКСИ (низкое разрешение, LRV/LRF)" or "Режим: ОРИГИНАЛ (полное разрешение)"
+    if not cur then osd(msg, 3); return end
+    local has_px = proxy_for(cur.dir, cur.file) ~= nil
+    if use_proxy and not has_px then
+        osd(msg .. "\nУ этого файла прокси нет — остаётся оригинал", 4)
+        return
+    end
+    local t = mp.get_property_number("time-pos", 0)
+    local was_paused = mp.get_property_bool("pause")
+    resume_after_reload = { key = cur.key, t = t, pause = was_paused,
+                            in_t = cur.in_t, in_label = cur.in_label }
+    cur.in_t, cur.in_label = nil, nil       -- не считать «брошенным» при переоткрытии
+    osd(msg, 3)
+    mp.commandv("playlist-play-index", tostring(mp.get_property_number("playlist-pos", 0)))
+end
+bind("L", "proxy-toggle", toggle_proxy)
+
 bind("F1", "help", function() help_on = not help_on; refresh_ui() end)
 bind("F11", "fullscreen", function() mp.command("cycle fullscreen") end)
 

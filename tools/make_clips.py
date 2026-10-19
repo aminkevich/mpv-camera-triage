@@ -14,7 +14,7 @@ make_clips.py — нарезка клипов из разметки _triage.csv 
   Точечные метки из --point-exclude (по умолчанию нет) сами клипов не дают; внутри отрезка i/o
   они только добавляют метку клипу. Пример: --point-exclude dive.
 
-Режем всегда из оригинального MP4 (если его нет — из LRV, с предупреждением).
+Режем всегда из оригинального MP4 (если его нет — из прокси LRV/LRF, с предупреждением).
 По умолчанию без перекодирования (-c copy): быстро и без потерь, начало сдвигается
 к ближайшему ключевому кадру. --reencode — точные границы, H.264, медленнее.
 
@@ -159,11 +159,12 @@ def find_source(folder, fname):
         return p, False
     stem, up = Path(fname).stem, fname.upper()
     if up[:2] in ("GX", "GH") and up.endswith(".MP4"):
-        lrv = folder / ("GL" + stem[2:] + ".LRV")
+        cands = [folder / ("GL" + stem[2:] + ".LRV")]           # GoPro
     else:
-        lrv = folder / (stem + ".LRV")
-    if lrv.exists():
-        return lrv, True
+        cands = [folder / (stem + ".LRF"), folder / (stem + ".LRV")]   # DJI и прочие
+    for proxy in cands:
+        if proxy.exists():
+            return proxy, True
     return None, False
 
 

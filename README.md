@@ -62,6 +62,7 @@ install.ps1                       установка в %APPDATA%\mpv (Windows)
 | `+` `-` `Tab` `Backspace` | скорость ×2 / ÷2 / 1x↔быстро / 1x |
 | `PgUp` `PgDn` | к предыдущей / следующей метке |
 | `a` | активность (spearfishing / kitesurfing / other) |
+| `L` | оригинал ↔ прокси низкого разрешения (GoPro .LRV / DJI .LRF) |
 | `F1` | подсказка |
 
 Подробно — в [docs/triage-format.md](docs/triage-format.md).
