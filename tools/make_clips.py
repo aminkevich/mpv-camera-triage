@@ -11,7 +11,8 @@ make_clips.py — нарезка клипов из разметки _triage.csv 
                         (например i … b … o), не нарезается.
   * mark (точки)      — время − --pad-before … время + --pad-after
   Пересекающиеся или близкие (≤ --merge-gap) отрезки одного файла склеиваются,
-  метки объединяются в имени: GX011067_00-01-24_fish+shot.mp4
+  метки объединяются в имени: GX011067_00-01-24_14s_fish+shot.mp4 (начало, длительность, метки;
+  при смене отступов имя меняется и клип режется заново, старый убирает --prune)
   Метки из --exclude (по умолчанию bad) клипов не дают и в имя не попадают.
   Точечные метки из --point-exclude (по умолчанию нет) сами клипов не дают; внутри отрезка i/o
   они только добавляют метку клипу. Пример: --point-exclude dive.
@@ -52,12 +53,15 @@ import argparse
 import csv
 import json
 import shutil
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 CSV_NAME = "_triage.csv"
 INDEX_NAME = "_clips.csv"
+PENDING_NAME = "_clips.pending.csv"   # индекс, который не удалось записать (файл был открыт)
 INDEX_FIELDS = ["clip", "source", "src", "start_ms", "end_ms", "duration_ms",
                 "labels", "rating", "activity", "marks", "notes"]
 PROXY_EXTS = (".LRV", ".LRF")
@@ -202,6 +206,12 @@ def label_set(s):
     return {x.strip() for x in (s or "").split(",") if x.strip()}
 
 
+def clip_name(fname, s, e, labs):
+    """GX011151_00-01-20_14s_fish+shot.mp4 — начало и длительность в имени: при смене
+    pad_before или pad_after имя меняется, и клип режется заново (старый убирает --prune)."""
+    return f"{Path(fname).stem}_{hms_dash(s)}_{round(e - s)}s_{'+'.join(sorted(labs))}.mp4"
+
+
 def hms_dash(t):
     t = int(t)
     return f"{t // 3600:02d}-{t % 3600 // 60:02d}-{t % 60:02d}"
@@ -294,28 +304,86 @@ def merge(segs, gap):
 # ---------------------------------------------------------------- индекс
 
 def read_index(out_dir):
+    """Индекс + несохранённый остаток прошлого запуска (_clips.pending.csv, он новее)."""
+    rows = {}
+    for name in (INDEX_NAME, PENDING_NAME):
+        path = out_dir / name
+        if path.exists():
+            try:
+                rows.update({r["clip"]: r for r in read_rows(path) if r.get("clip")})
+            except OSError as e:
+                print(f"  ⚠ не могу прочитать {path.name}: {e}")
+    return rows
+
+
+def index_locked(out_dir):
+    """True, если _clips.csv открыт в другой программе (Excel блокирует файл на Windows)."""
     path = out_dir / INDEX_NAME
     if not path.exists():
-        return {}
-    return {r["clip"]: r for r in read_rows(path) if r.get("clip")}
+        return False
+    try:
+        with open(path, "r+b"):
+            return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def wait_index_unlocked(out_dir):
+    """Перед нарезкой: если индекс открыт — попросить закрыть (в интерактивном окне)."""
+    if not index_locked(out_dir):
+        return
+    print(f"  ⚠ {out_dir / INDEX_NAME} открыт в другой программе (Excel?).")
+    if sys.stdin and sys.stdin.isatty():
+        try:
+            input("    Закрой его и нажми Enter (или просто Enter — продолжить без этого) ")
+        except EOFError:
+            pass
+    if index_locked(out_dir):
+        print(f"    Клипы будут нарезаны, индекс сохранится в {PENDING_NAME} "
+              f"и перенесётся в {INDEX_NAME} при следующем запуске.")
 
 
 def write_index(out_dir, old, entries):
     """Обновляет Clips/_clips.csv: новые записи заменяют старые с тем же именем,
-    записи о клипах, которых больше нет на диске, удаляются."""
+    записи о клипах, которых больше нет на диске, удаляются.
+    Пишет во временный файл и подменяет; если _clips.csv заблокирован — оставляет
+    _clips.pending.csv, который подхватит следующий запуск."""
     merged = dict(old)
     for e in entries:
         merged[e["clip"]] = e
     rows = [r for name, r in sorted(merged.items()) if (out_dir / name).exists()]
-    path = out_dir / INDEX_NAME
-    if not rows:
-        if path.exists():
-            path.unlink()
-        return
-    with open(path, "w", encoding="utf-8-sig", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=INDEX_FIELDS, delimiter=";", extrasaction="ignore")
-        w.writeheader()
-        w.writerows(rows)
+    path, pending = out_dir / INDEX_NAME, out_dir / PENDING_NAME
+    tmp = out_dir / (INDEX_NAME + ".tmp")
+    try:
+        if not rows:
+            for p in (path, pending):
+                if p.exists():
+                    p.unlink()
+            return
+        with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=INDEX_FIELDS, delimiter=";", extrasaction="ignore")
+            w.writeheader()
+            w.writerows(rows)
+        for attempt in range(3):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 2:
+                    raise
+                time.sleep(1)
+        if pending.exists():
+            pending.unlink()
+    except OSError as e:
+        try:
+            if tmp.exists():
+                os.replace(tmp, pending)
+            print(f"  ⚠ {INDEX_NAME} не обновлён ({e.__class__.__name__}: файл открыт?). "
+                  f"Записан {PENDING_NAME} — перенесётся при следующем запуске.")
+        except OSError as e2:
+            print(f"  ✗ индекс не сохранён: {e2}")
 
 
 # ---------------------------------------------------------------- ffmpeg
@@ -408,6 +476,8 @@ def process_folder(csv_path, args, only, exclude, point_exclude):
         return st
     files = collect(rows)
     old = read_index(out_dir)
+    if not args.dry_run:
+        wait_index_unlocked(out_dir)
     index, keep, missing = [], set(), []
 
     try:
@@ -426,8 +496,7 @@ def process_folder(csv_path, args, only, exclude, point_exclude):
             segs = [x for x in segs if x[1] - x[0] >= 0.5]
             if not segs:
                 continue
-            names = [f"{Path(fname).stem}_{hms_dash(s)}_{'+'.join(sorted(labs))}.mp4"
-                     for s, e, labs in segs]
+            names = [clip_name(fname, s, e, labs) for s, e, labs in segs]
             keep.update(names)                      # даже если исходника нет — не удалять при --prune
             src, is_proxy = find_source(folder, fname)
             if src is None:
@@ -456,6 +525,11 @@ def process_folder(csv_path, args, only, exclude, point_exclude):
                         for k in ("src", "start_ms", "duration_ms"):
                             if prev.get(k):
                                 entry[k] = prev[k]
+                    elif not args.dry_run and not args.reencode:   # индекс был потерян — восстановить
+                        kf = keyframe_before(src, s)
+                        if kf is not None and kf < s:
+                            entry["start_ms"] = int(kf * 1000)
+                            entry["duration_ms"] = int((e - kf) * 1000)
                     index.append(entry)
                     continue
                 if upgrade:

@@ -75,7 +75,7 @@ py tools\make_clips.py "D:\Footage\2026-09_Turkey" --dry-run
 py tools\make_clips.py "D:\Footage\2026-09_Turkey" --min-rating 2
 ```
 
-Клипы появляются в подпапке `Clips\` рядом с видео: `GX011151_00-01-20_fish+shot.mp4`.
+Клипы появляются в подпапке `Clips\` рядом с видео: `GX011151_00-01-20_14s_fish+shot.mp4`.
 Отступы вокруг меток и другие постоянные параметры — в `tools\make_clips.conf`.
 
 ## Важно
