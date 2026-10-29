@@ -36,6 +36,12 @@ make_clips.py — нарезка клипов из разметки _triage.csv 
 имена новых клипов другие, а старые остаются — --prune удаляет из Clips/ клипы, которых нет
 в текущем плане (только те, что записаны в _clips.csv; чужие файлы не трогаются).
 
+Настройки (make_clips.conf рядом со скриптом, или --config ПУТЬ):
+  постоянные параметры — отступы (глобально и по меткам), склейка, исключения, мин. оценка,
+  папка для клипов, параметры --reencode. Приоритет: встроенные значения → конфиг → командная
+  строка. --pad-before / --pad-after в командной строке задают отступ для ВСЕХ меток
+  (отступы по меткам из конфига для этой стороны не действуют). Формат — см. make_clips.conf.
+
 Примеры:
   py make_clips.py "C:\\...\\20260918_GoPro_Raznirka_Pristrelka" --dry-run
   py make_clips.py "C:\\...\\02_SourceVideos" --min-rating 2
@@ -55,35 +61,141 @@ INDEX_NAME = "_clips.csv"
 INDEX_FIELDS = ["clip", "source", "src", "start_ms", "end_ms", "duration_ms",
                 "labels", "rating", "activity", "marks", "notes"]
 PROXY_EXTS = (".LRV", ".LRF")
+CONFIG_NAME = "make_clips.conf"
+# метки camera_triage.lua — для проверки опечаток в pad.<метка>
+KNOWN_LABELS = {"highlight", "scenery", "people", "bad", "fish", "shot", "catch", "wildlife",
+                "dive", "jump", "trick", "crash", "ride"}
+
+# встроенные значения; конфиг и командная строка их переопределяют
+DEFAULTS = {
+    "pad_before": 5.0, "pad_after": 5.0, "clip_pad": 0.5, "merge_gap": 2.0,
+    "exclude": "bad", "point_exclude": "", "min_rating": None, "out": "Clips",
+    "reencode_crf": 18, "reencode_preset": "medium",
+}
+X264_PRESETS = {"ultrafast", "superfast", "veryfast", "faster", "fast", "medium",
+                "slow", "slower", "veryslow"}
+
+
+def parse_pad(v):
+    """«6/3» → (6, 3); «7» → (7, 7)."""
+    parts = [x.strip() for x in v.split("/")]
+    if len(parts) == 1:
+        parts *= 2
+    if len(parts) != 2:
+        raise ValueError
+    b, a = float(parts[0]), float(parts[1])
+    if b < 0 or a < 0:
+        raise ValueError
+    return b, a
+
+
+def load_config(path):
+    """Простой формат «ключ = значение», комментарии # и ;. Возвращает (settings, label_pads)."""
+    cfg, pads, errors = {}, {}, []
+    for n, raw in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+        line = raw.split("#", 1)[0].split(";", 1)[0].strip()
+        if not line:
+            continue
+        if "=" not in line:
+            errors.append(f"строка {n}: нет «=»: {raw.strip()}")
+            continue
+        key, val = (x.strip() for x in line.split("=", 1))
+        key = key.lower().replace("-", "_")
+        try:
+            if key.startswith("pad."):
+                label = key[4:]
+                if label not in KNOWN_LABELS:
+                    errors.append(f"строка {n}: неизвестная метка «{label}» "
+                                  f"(есть: {', '.join(sorted(KNOWN_LABELS))})")
+                    continue
+                pads[label] = parse_pad(val)
+            elif key in ("pad_before", "pad_after", "clip_pad", "merge_gap"):
+                cfg[key] = float(val)
+                if cfg[key] < 0:
+                    raise ValueError
+            elif key in ("min_rating", "reencode_crf"):
+                cfg[key] = int(val) if val else None
+            elif key == "reencode_preset":
+                if val not in X264_PRESETS:
+                    raise ValueError
+                cfg[key] = val
+            elif key in ("exclude", "point_exclude", "out"):
+                cfg[key] = val
+            else:
+                errors.append(f"строка {n}: неизвестный параметр «{key}»")
+        except ValueError:
+            errors.append(f"строка {n}: неверное значение для {key}: «{val}»")
+    if errors:
+        sys.exit(f"Ошибки в {path}:\n  " + "\n  ".join(errors))
+    if cfg.get("reencode_crf") is None:
+        cfg.pop("reencode_crf", None)
+    return cfg, pads
 
 
 def parse_args():
     ap = argparse.ArgumentParser(description="Нарезка клипов из _triage.csv")
     ap.add_argument("folders", nargs="+", type=Path, help="папки футажа или родительские папки")
-    ap.add_argument("--pad-before", type=float, default=5.0, help="секунд до точечной метки (5)")
-    ap.add_argument("--pad-after", type=float, default=5.0, help="секунд после точечной метки (5)")
-    ap.add_argument("--clip-pad", type=float, default=0.5, help="запас вокруг отрезков i/o (0.5)")
-    ap.add_argument("--merge-gap", type=float, default=2.0, help="склеивать отрезки ближе N секунд (2)")
+    ap.add_argument("--config", type=Path,
+                    help=f"файл настроек (по умолчанию {CONFIG_NAME} рядом со скриптом, если есть)")
+    ap.add_argument("--pad-before", type=float, help="секунд до точечной метки, для всех меток (5)")
+    ap.add_argument("--pad-after", type=float, help="секунд после точечной метки, для всех меток (5)")
+    ap.add_argument("--clip-pad", type=float, help="запас вокруг отрезков i/o (0.5)")
+    ap.add_argument("--merge-gap", type=float, help="склеивать отрезки ближе N секунд (2)")
     ap.add_argument("--labels", help="только клипы с этими метками, через запятую (например fish,shot)")
-    ap.add_argument("--exclude", default="bad", help="метки, из которых клипы не делать (bad)")
-    ap.add_argument("--point-exclude", default="",
+    ap.add_argument("--exclude", help="метки, из которых клипы не делать (bad)")
+    ap.add_argument("--point-exclude",
                     help="точечные метки, которые сами клипов не дают (например dive)")
-    ap.add_argument("--min-rating", type=int, default=None,
+    ap.add_argument("--min-rating", type=int,
                     help="только файлы с оценкой ≥ N; при N>0 непросмотренные файлы пропускаются. "
                          "По умолчанию — всё, кроме файлов с оценкой 0")
     ap.add_argument("--no-marks", action="store_true",
                     help="только отрезки i/o; точечные метки лишь добавляют метки клипам")
     ap.add_argument("--reencode", action="store_true", help="экспорт для совместимости: перекодировать в H.264 8 бит + AAC "
                          "(играет везде, старт ровно по кадру; на 4K очень медленно)")
-    ap.add_argument("--out", default="Clips", help="имя подпапки для клипов (Clips)")
+    ap.add_argument("--out", help="имя подпапки для клипов (Clips)")
     ap.add_argument("--overwrite", action="store_true", help="перезаписывать существующие клипы")
     ap.add_argument("--prune", action="store_true",
                     help="удалить из Clips/ клипы из _clips.csv, которых нет в текущем плане")
     ap.add_argument("--dry-run", action="store_true", help="только показать, что будет сделано")
     a = ap.parse_args()
+
+    cfg_path = a.config or Path(__file__).resolve().with_name(CONFIG_NAME)
+    if a.config and not a.config.exists():
+        ap.error(f"файл настроек не найден: {a.config}")
+    cfg, pads = load_config(cfg_path) if cfg_path.exists() else ({}, {})
+    a.config_used = cfg_path if cfg_path.exists() else None
+
+    cli = {k: getattr(a, k) for k in DEFAULTS if getattr(a, k, None) is not None}
+    for k, v in DEFAULTS.items():
+        setattr(a, k, cli.get(k, cfg.get(k, v)))
+    # --pad-before/--pad-after в командной строке перекрывают и отступы по меткам
+    a.label_pads = {lab: (a.pad_before if "pad_before" in cli else b,
+                          a.pad_after if "pad_after" in cli else af)
+                    for lab, (b, af) in pads.items()}
     if a.merge_gap < 0 or a.pad_before < 0 or a.pad_after < 0 or a.clip_pad < 0:
         ap.error("отступы и --merge-gap не могут быть отрицательными")
     return a
+
+
+def pads_for(args, label):
+    return args.label_pads.get(label, (args.pad_before, args.pad_after))
+
+
+def describe_settings(args):
+    src = f"конфиг: {args.config_used}" if args.config_used else "конфиг не найден, встроенные значения"
+    lines = [f"Настройки ({src})",
+             f"  отступы: −{args.pad_before:g} / +{args.pad_after:g} с"]
+    special = {lab: p for lab, p in args.label_pads.items() if p != (args.pad_before, args.pad_after)}
+    if special:
+        lines[-1] += ";  по меткам: " + ", ".join(
+            f"{lab} −{b:g}/+{af:g}" for lab, (b, af) in sorted(special.items()))
+    lines.append(f"  клип i/o ±{args.clip_pad:g} с, склейка ≤ {args.merge_gap:g} с, "
+                 f"исключить: {args.exclude or '—'}"
+                 + (f", точки без клипа: {args.point_exclude}" if args.point_exclude else "")
+                 + (f", мин. оценка: {args.min_rating}" if args.min_rating is not None else ""))
+    if args.reencode:
+        lines.append(f"  перекодирование: libx264 CRF {args.reencode_crf}, preset {args.reencode_preset}")
+    return "\n".join(lines)
 
 
 def label_set(s):
@@ -160,7 +272,8 @@ def build_segments(d, args, only, exclude, point_exclude):
                 continue
             if any(s <= t <= e for s, e, _ in d["clips"]):
                 continue                            # внутри i/o — уже учтена в метках клипа
-            segs.append((max(0.0, t - args.pad_before), t + args.pad_after, {lab}))
+            before, after = pads_for(args, lab)
+            segs.append((max(0.0, t - before), t + after, {lab}))
     merged = merge(segs, args.merge_gap)
     if only:
         merged = [m for m in merged if m[2] & only]
@@ -247,24 +360,25 @@ def keyframe_before(src, t):
     return max(0.0, best) if best is not None else None
 
 
-def ffmpeg_cmd(src, dst, start, dur, reencode):
+def ffmpeg_cmd(src, dst, start, dur, reencode, crf=18, preset="medium"):
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
            "-ss", f"{start:.3f}", "-i", str(src), "-t", f"{dur:.3f}",
            "-map", "0:v:0", "-map", "0:a:0?"]
     if reencode:
-        cmd += ["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+        cmd += ["-c:v", "libx264", "-crf", str(crf), "-preset", preset, "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "192k"]
     else:
         cmd += ["-c", "copy", "-avoid_negative_ts", "make_zero"]
     return cmd + ["-movflags", "+faststart", str(dst)]
 
 
-def cut(src, dst, start, dur, reencode):
+def cut(src, dst, start, dur, args):
     """Режет во временный файл и переименовывает только при успехе:
     оборванный клип (ошибка, Ctrl+C) не остаётся на диске под «готовым» именем."""
     tmp = dst.with_name(dst.stem + ".part" + dst.suffix)
     try:
-        res = subprocess.run(ffmpeg_cmd(src, tmp, start, dur, reencode),
+        res = subprocess.run(ffmpeg_cmd(src, tmp, start, dur, args.reencode,
+                                        args.reencode_crf, args.reencode_preset),
                              capture_output=True, text=True, encoding="utf-8", errors="replace")
         if res.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
             tmp.replace(dst)
@@ -356,7 +470,7 @@ def process_folder(csv_path, args, only, exclude, point_exclude):
                     if kf is not None and kf < s:
                         entry["start_ms"] = int(kf * 1000)
                         entry["duration_ms"] = int((e - kf) * 1000)
-                err = cut(src, dst, s, e - s, args.reencode)
+                err = cut(src, dst, s, e - s, args)
                 if err is None:
                     print(tag + "  ✓")
                     st["made"] += 1
@@ -396,6 +510,7 @@ def main():
         except (AttributeError, ValueError):
             pass
     args = parse_args()
+    print(describe_settings(args))
     if not args.dry_run and shutil.which("ffmpeg") is None:
         sys.exit("ffmpeg не найден в PATH. Установи: winget install Gyan.FFmpeg  (и открой новое окно терминала)")
     if not args.dry_run and not args.reencode and shutil.which("ffprobe") is None:
