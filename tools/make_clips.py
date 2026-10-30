@@ -36,6 +36,9 @@ make_clips.py — нарезка клипов из разметки _triage.csv 
 Повторный запуск: существующие клипы не трогаются. Если разметка или параметры изменились,
 имена новых клипов другие, а старые остаются — --prune удаляет из Clips/ клипы, которых нет
 в текущем плане (только те, что записаны в _clips.csv; чужие файлы не трогаются).
+План для --prune строится без --labels, --no-marks и --min-rating: эти фильтры выбирают,
+что резать сейчас, но клипы с другими метками и из файлов с меньшей оценкой не удаляют.
+Удаляются клипы после смены разметки, отступов или оценки 0.
 
 Настройки (make_clips.conf рядом со скриптом, или --config ПУТЬ):
   постоянные параметры — отступы (глобально и по меткам), склейка, исключения, мин. оценка,
@@ -159,7 +162,8 @@ def parse_args():
     ap.add_argument("--out", help="имя подпапки для клипов (Clips)")
     ap.add_argument("--overwrite", action="store_true", help="перезаписывать существующие клипы")
     ap.add_argument("--prune", action="store_true",
-                    help="удалить из Clips/ клипы из _clips.csv, которых нет в текущем плане")
+                    help="удалить из Clips/ клипы из _clips.csv, которых нет в текущем плане "
+                         "(--labels, --no-marks, --min-rating на это не влияют)")
     ap.add_argument("--dry-run", action="store_true", help="только показать, что будет сделано")
     a = ap.parse_args()
 
@@ -265,8 +269,8 @@ def collect(rows):
     return files
 
 
-def build_segments(d, args, only, exclude, point_exclude):
-    """Список склеенных отрезков [(start, end, labels:set)] для одного файла."""
+def build_segments(d, args, exclude, point_exclude, no_marks):
+    """Список склеенных отрезков [(start, end, labels:set)] для одного файла, без фильтра --labels."""
     segs = []
     for s, e, clabel in d["clips"]:
         labs = {lab for t, lab in d["marks"] if s <= t <= e}
@@ -276,7 +280,7 @@ def build_segments(d, args, only, exclude, point_exclude):
         if labs and not kept:
             continue                                # i … b … o — клип целиком «плохой»
         segs.append((max(0.0, s - args.clip_pad), e + args.clip_pad, kept or {"clip"}))
-    if not args.no_marks:
+    if not no_marks:
         for t, lab in d["marks"]:
             if lab in exclude or lab in point_exclude:
                 continue
@@ -285,9 +289,9 @@ def build_segments(d, args, only, exclude, point_exclude):
             before, after = pads_for(args, lab)
             segs.append((max(0.0, t - before), t + after, {lab}))
     merged = merge(segs, args.merge_gap)
-    if only:
-        merged = [m for m in merged if m[2] & only]
-    return merged
+    if d["duration"]:
+        merged = [(s, min(e, d["duration"]), labs) for s, e, labs in merged]
+    return [x for x in merged if x[1] - x[0] >= 0.5]
 
 
 def merge(segs, gap):
@@ -478,26 +482,29 @@ def process_folder(csv_path, args, only, exclude, point_exclude):
     old = read_index(out_dir)
     if not args.dry_run:
         wait_index_unlocked(out_dir)
-    index, keep, missing = [], set(), []
+    index, keep, missing, planned = [], set(), [], False
 
     try:
         for fname, d in sorted(files.items()):
             rating = d["rating"]
-            if args.min_rating is None:
-                if rating == 0:
-                    if d["marks"] or d["clips"]:
-                        print(f"  · {fname}: оценка 0, пропуск (--min-rating 0 — брать)")
-                    continue
-            elif args.min_rating > 0 and (rating is None or rating < args.min_rating):
+            if rating == 0 and args.min_rating != 0:
+                if args.min_rating is None and (d["marks"] or d["clips"]):
+                    print(f"  · {fname}: оценка 0, пропуск (--min-rating 0 — брать)")
                 continue
-            segs = build_segments(d, args, only, exclude, point_exclude)
-            if d["duration"]:
-                segs = [(s, min(e, d["duration"]), labs) for s, e, labs in segs]
-            segs = [x for x in segs if x[1] - x[0] >= 0.5]
+            # --prune: --labels, --no-marks и --min-rating — только выбор, что резать сейчас;
+            # клипы полного плана не удаляются (иначе --labels fish --prune стёр бы всё остальное)
+            keep.update(clip_name(fname, s, e, labs)
+                        for s, e, labs in build_segments(d, args, exclude, point_exclude, False))
+            if args.min_rating and (rating is None or rating < args.min_rating):
+                continue
+            segs = build_segments(d, args, exclude, point_exclude, args.no_marks)
+            if only:
+                segs = [x for x in segs if x[2] & only]
             if not segs:
                 continue
             names = [clip_name(fname, s, e, labs) for s, e, labs in segs]
             keep.update(names)                      # даже если исходника нет — не удалять при --prune
+            planned = True
             src, is_proxy = find_source(folder, fname)
             if src is None:
                 missing.append(fname)               # сводка одной строкой в конце папки
@@ -569,7 +576,7 @@ def process_folder(csv_path, args, only, exclude, point_exclude):
         more = f" и ещё {len(missing) - 3}" if len(missing) > 3 else ""
         print(f"  ⚠ {len(missing)} файл(ов) из разметки нет в папке "
               f"(ни MP4, ни прокси), пропуск: {shown}{more}")
-    if not keep:
+    if not planned:
         print("  (нечего нарезать)")
     return st
 

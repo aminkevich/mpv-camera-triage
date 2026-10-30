@@ -855,8 +855,9 @@ mp.register_event("file-loaded", function()
     local rr = resume_after_reload
     resume_after_reload = nil
     if rr and rr.key == key then
-        -- переоткрыт клавишей L: то же место, та же пауза, открытый клип сохраняется
+        -- переоткрыт клавишей L: то же место, та же пауза, открытый клип и оценка без ENTER сохраняются
         cur.in_t, cur.in_label = rr.in_t, rr.in_label
+        cur.rating, cur.saved_rating = rr.rating, rr.saved_rating
         cur.last_t = rr.t
         mp.commandv("seek", tostring(rr.t), "absolute+exact")
         mp.set_property_bool("pause", rr.pause)
@@ -887,6 +888,10 @@ mp.register_event("end-file", function()
     local c = cur
     if not c then return end
     if c.finished then cur = nil; return end
+    if resume_after_reload and resume_after_reload.key == c.key then
+        cur = nil       -- переоткрытие по L: оценка и клип переносятся, file_partial не нужен
+        return
+    end
     local msgs = {}
     if c.in_t then
         msgs[#msgs + 1] = "незакрытый клип с " .. hms(c.in_t) .. " отброшен"
@@ -1013,8 +1018,8 @@ local function toggle_proxy()
     local t = mp.get_property_number("time-pos", 0)
     local was_paused = mp.get_property_bool("pause")
     resume_after_reload = { key = cur.key, t = t, pause = was_paused,
-                            in_t = cur.in_t, in_label = cur.in_label }
-    cur.in_t, cur.in_label = nil, nil       -- не считать «брошенным» при переоткрытии
+                            in_t = cur.in_t, in_label = cur.in_label,
+                            rating = cur.rating, saved_rating = cur.saved_rating }
     osd(msg, 3)
     mp.commandv("playlist-play-index", tostring(mp.get_property_number("playlist-pos", 0)))
 end
@@ -1023,4 +1028,4 @@ bind("L", "proxy-toggle", toggle_proxy)
 bind("F1", "help", function() help_on = not help_on; refresh_ui() end)
 bind("F11", "fullscreen", function() mp.command("cycle fullscreen") end)
 
-mp.msg.info("camera_triage v3.0: CSV = <папка видео>/" .. o.csv_name)
+mp.msg.info("camera_triage v3.3: CSV = <папка видео>/" .. o.csv_name)
