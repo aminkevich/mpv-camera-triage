@@ -1,5 +1,5 @@
 -- camera_triage.lua — быстрая ручная разметка (триаж) футажа экшн-камер в mpv
--- Версия 3.3. Нужна mpv 0.38 или новее.
+-- Версия 3.4. Нужна mpv 0.38 или новее.
 -- Работает с любыми видео. Понимает прокси низкого разрешения: GoPro .LRV и DJI .LRF
 -- (можно смотреть их вместо тяжёлых MP4), для GoPro — имена глав (GX01…).
 --
@@ -18,6 +18,9 @@
 --   ENTER       файл просмотрен → записать оценку → следующий НЕпросмотренный
 --               (открытый клип при этом закрывается в текущей позиции)
 --   u           отменить: открытый клип (i) — сразу; запись в CSV — после подтверждения (u ещё раз)
+--   Del         удалить ближайшую метку / клип / заметку (±3 с), в том числе из прошлых сессий;
+--               после подтверждения (Del ещё раз). u возвращает удалённое
+--   Главы одной записи GoPro (GX01…, GX02…) в плейлисте идут подряд (gopro_order)
 --   + -         скорость ×2 / ÷2       TAB  1x ↔ быстро       BACKSPACE  1x
 --   PgUp PgDn   прыжок к предыдущей / следующей метке (метки видны засечками на полосе прокрутки)
 --   a           сменить активность (запоминается в CSV папки)   F1 подсказка   F11 полный экран
@@ -53,6 +56,7 @@ local o = {
     status_bar  = true,    -- постоянный статус в правом верхнем углу
     show_marks  = true,    -- при просмотре всплывают ранее поставленные метки
     sort_on_exit = true,   -- при выходе сортировать CSV по файлу и времени
+    gopro_order = true,    -- главы GoPro одной записи (GX01…, GX02…) в плейлисте подряд
 }
 options.read_options(o, "camera_triage")
 local use_proxy = o.prefer_proxy or o.prefer_lrv     -- текущий режим; клавиша L переключает
@@ -77,6 +81,7 @@ local HELP = table.concat({
     "j jump  t trick  x crash  r ride",
     "i / o  начало / конец клипа     n заметка к моменту   N к файлу",
     "0-3 оценка файла     ENTER готово → следующий     u отменить",
+    "Del  удалить метку рядом (±3 с), и из прошлых сессий; u — вернуть",
     "+ - скорость   TAB 1x↔быстро   BACKSPACE 1x   a активность",
     "PgUp/PgDn  к предыдущей / следующей метке",
     "Пауза ПРОБЕЛ   Кадр . ,   Перемотка стрелки   < > файлы",
@@ -191,6 +196,21 @@ local function proxy_for(dir, fname)
     return nil
 end
 
+-- GoPro пишет длинную запись главами: GX010123, GX020123, … (первые две цифры — глава,
+-- последние четыре — номер записи); старые камеры — GOPR0123 (1-я глава), GP010123 (2-я), …
+-- Ключ сортировки «запись, затем глава», чтобы главы одной записи шли подряд; не GoPro — nil.
+local function gopro_key(fname)
+    local up = fname:upper()
+    local ch, num = up:match("^G[HXL](%d%d)(%d%d%d%d)%.")
+    if not ch then ch, num = up:match("^GP(%d%d)(%d%d%d%d)%.") end
+    if not ch then
+        num = up:match("^GOPR(%d%d%d%d)%.")
+        ch = num and "00"
+    end
+    if not num then return nil end
+    return num .. "_" .. ch .. "_" .. up
+end
+
 local function full_path(p)
     local np = mp.command_native({ "normalize-path", p })
     if np and np ~= "" then return np end
@@ -272,7 +292,7 @@ local function load_index(dir, force)
                         ix.points[k] = pts
                         local label = (ev == "note") and (row[col.note] or "") or (row[col.label] or "")
                         pts[#pts + 1] = { t = t / 1000, e = tonumber(row[col.end_ms] or ""),
-                                          ev = ev, label = label }
+                                          ev = ev, label = label, line = line }
                         if pts[#pts].e then pts[#pts].e = pts[#pts].e / 1000 end
                     end
                 end
@@ -307,10 +327,31 @@ local function append_row(fields)
     end
     local out = {}
     for i = 1, #HEADER do out[i] = csv_field(fields[HEADER[i]]) end
-    f:write(table.concat(out, ";") .. "\n")
+    local line = table.concat(out, ";")
+    f:write(line .. "\n")
     f:close()
-    written[#written + 1] = { path = path, dir = cur.dir }
+    written[#written + 1] = { path = path, dir = cur.dir, line = line }
     touched[path] = true
+    return true
+end
+
+-- Убрать из CSV одну строку (первое точное совпадение).
+-- true — удалена; false, текст — такой строки нет; nil, текст — не удалось прочитать/записать.
+local function remove_line(path, line)
+    local f = io.open(path, "rb")
+    if not f then return nil, "CSV не найден" end
+    local data = f:read("*a")
+    f:close()
+    local out, removed = {}, false
+    for raw in data:gmatch("[^\n]+") do
+        if not removed and raw:gsub("\r$", "") == line then removed = true
+        else out[#out + 1] = raw end
+    end
+    if not removed then return false, "строка уже изменена или удалена" end
+    local w, err = io.open(path, "wb")
+    if not w then return nil, tostring(err) end
+    w:write(table.concat(out, "\n") .. "\n")
+    w:close()
     return true
 end
 
@@ -326,7 +367,7 @@ local function base_row(event, with_speed)
     }
 end
 
--- Сортировка CSV: по файлу; внутри файла — события со временем (по времени), заметки к файлу,
+-- Сортировка CSV: по файлу (главы GoPro — подряд по записи); внутри файла — события со временем (по времени), заметки к файлу,
 -- затем file_partial / file_done. При равенстве — порядок записи. Пишем во временный файл и подменяем.
 local function sort_csv(path)
     if header_state(path) ~= true then return end
@@ -347,7 +388,8 @@ local function sort_csv(path)
                 local ev = r[col.event] or ""
                 local t = tonumber(r[col.time_ms] or "")
                 local grp = (ev == "file_done" or ev == "file_partial") and 2 or (t and 0 or 1)
-                rows[#rows + 1] = { line = line, file = (r[col.file] or ""):upper(),
+                local file = r[col.file] or ""
+                rows[#rows + 1] = { line = line, file = gopro_key(file) or file:upper(),
                                     grp = grp, t = t or 0, n = #rows }
             end
         end
@@ -587,6 +629,14 @@ local function note_file()
     end, prefill)
 end
 
+-- строка CSV (разобранная) → «fish  00:01:29», для подтверждений u и Del
+local function describe_row(r)
+    local what = (r[2] or "") .. " " .. ((r[2] == "note") and (r[11] or "") or (r[9] or "")) ..
+                 " " .. (r[10] or "") .. " " .. (r[8] or "")
+    if (r[4] or ""):upper() ~= (cur and cur.key or "") then what = what .. "   (файл " .. (r[4] or "") .. ")" end
+    return what
+end
+
 local undo_armed = nil      -- { line, at }: ждём подтверждения отмены
 local function undo()
     if cur and cur.in_t then
@@ -597,32 +647,34 @@ local function undo()
     end
     local last_w = written[#written]
     if not last_w then osd("Нечего отменять (в этой сессии)"); return end
-    local f = io.open(last_w.path, "rb")
-    if not f then osd("⚠ CSV не найден"); return end
-    local data = f:read("*a")
-    f:close()
-    local body = data:gsub("\r?\n$", "")
-    local last = body:match("([^\n]*)$") or ""
-    local rest = body:sub(1, #body - #last)
+    local last = last_w.line
+    local r = parse_csv_line(last)
+    local what = describe_row(r)
     -- подтверждение: первое u только показывает, что будет отменено
-    local r0 = parse_csv_line(last)
-    local what = (r0[2] or "") .. " " .. ((r0[2] == "note") and (r0[11] or "") or (r0[9] or "")) ..
-                 " " .. (r0[10] or "") .. " " .. (r0[8] or "")
-    if (r0[4] or ""):upper() ~= (cur and cur.key or "") then what = what .. "   (файл " .. (r0[4] or "") .. ")" end
     local now = mp.get_time()
     if not (undo_armed and undo_armed.line == last and now - undo_armed.at < 4) then
         undo_armed = { line = last, at = now }
-        osd("u ещё раз — отменить:  " .. what, 4)
+        osd((last_w.deleted and "u ещё раз — вернуть удалённое:  " or "u ещё раз — отменить:  ") .. what, 4)
         return
     end
     undo_armed = nil
-    local w, err = io.open(last_w.path, "wb")
-    if not w then osd("⚠ Не могу записать CSV: " .. tostring(err), 5); return end
-    w:write(rest)
-    w:close()
+    if last_w.deleted then
+        -- отмена удаления (Del): строка возвращается в конец CSV, при выходе встанет на место
+        local f, err = io.open(last_w.path, "ab")
+        if not f then osd("⚠ Не могу записать CSV: " .. tostring(err), 5); return end
+        f:write(last .. "\n")
+        f:close()
+        table.remove(written)
+        load_index(last_w.dir, true)
+        if cur and cur.dir == last_w.dir then update_chapters() end
+        osd("↶ Возвращено: " .. what)
+        return
+    end
+    local ok, err = remove_line(last_w.path, last)
+    if ok == nil then osd("⚠ Не могу записать CSV: " .. err, 5); return end
     table.remove(written)
+    if not ok then osd("⚠ Не отменено: " .. err, 5); return end
     load_index(last_w.dir, true)
-    local r = parse_csv_line(last)
     if cur and cur.dir == last_w.dir then
         update_chapters()
         local k = (r[4] or ""):upper()
@@ -637,6 +689,47 @@ local function undo()
     else
         osd("↶ Отменено: " .. what)
     end
+end
+
+-- Del: удалить ближайшую к текущему месту метку, клип или заметку — в том числе из прошлых сессий.
+-- Клип выбирается по его началу или концу. Удобно: PgUp/PgDn к метке → Del → Del.
+-- Удалённое возвращает u (как обычную отмену).
+local DEL_WINDOW = 3          -- секунд от текущего места
+local del_armed = nil         -- { line, at }: ждём подтверждения удаления
+local function delete_near()
+    if not need_file() then return end
+    local ix = index[cur.dir]
+    if ix.bad then osd("⚠ _triage.csv в другом формате — удаление невозможно", 4); return end
+    local t = mp.get_property_number("time-pos", 0)
+    local best, bd = nil, nil
+    for _, p in ipairs((ix.points or {})[cur.key] or {}) do
+        local d = math.abs(t - p.t)
+        if p.e then d = math.min(d, math.abs(t - p.e)) end
+        if d <= DEL_WINDOW and (not bd or d < bd) then best, bd = p, d end
+    end
+    if not best then
+        osd("Рядом (±" .. DEL_WINDOW .. " с) нет меток.  PgUp/PgDn — к метке, потом Del", 3)
+        return
+    end
+    local what = describe_row(parse_csv_line(best.line))
+    local now = mp.get_time()
+    if not (del_armed and del_armed.line == best.line and now - del_armed.at < 4) then
+        del_armed = { line = best.line, at = now }
+        osd("Del ещё раз — удалить:  " .. what, 4)
+        return
+    end
+    del_armed = nil
+    local ok, err = remove_line(cur.csv, best.line)
+    if not ok then osd("⚠ Не удалено: " .. err, 5); reload_marks(); return end
+    -- если это запись этой сессии, u больше не должен её «отменять» — вместо этого u вернёт её
+    for i = #written, 1, -1 do
+        local w = written[i]
+        if not w.deleted and w.path == cur.csv and w.line == best.line then table.remove(written, i); break end
+    end
+    written[#written + 1] = { path = cur.csv, dir = cur.dir, line = best.line, deleted = true }
+    touched[cur.csv] = true
+    reload_marks()
+    osd("✕ Удалено: " .. what .. "     u — вернуть")
 end
 
 -- просмотрен ли файл записи плейлиста
@@ -751,6 +844,39 @@ local function playlist_sig(pl)
     return #pl .. "|" .. (pl[1].filename or "") .. "|" .. (pl[#pl].filename or "")
 end
 
+-- Главы GoPro по порядку записи: mpv сортирует по имени (GX010123, GX010124, …, GX020123),
+-- и продолжение записи уходит в конец. Переставляются только файлы GoPro, на места,
+-- которые они уже занимают; остальные файлы не двигаются. true — порядок изменился.
+local function reorder_gopro()
+    local pl = mp.get_property_native("playlist") or {}
+    local slots, items = {}, {}
+    for i, e in ipairs(pl) do
+        local _, dir, fname = split(e.filename)
+        local k = gopro_key(fname)
+        if k then
+            slots[#slots + 1] = i
+            items[#items + 1] = { f = e.filename, k = dir:upper() .. "|" .. k }
+        end
+    end
+    if #items < 2 then return false end
+    table.sort(items, function(a, b) return a.k < b.k end)
+    local want, have = {}, {}
+    for i, e in ipairs(pl) do want[i], have[i] = e.filename, e.filename end
+    for j, i in ipairs(slots) do want[i] = items[j].f end
+    local moved = false
+    for i = 1, #want do
+        if have[i] ~= want[i] then
+            local j = i + 1
+            while j <= #have and have[j] ~= want[i] do j = j + 1 end
+            if j > #have then break end
+            mp.commandv("playlist-move", tostring(j - 1), tostring(i - 1))
+            table.insert(have, i, table.remove(have, j))
+            moved = true
+        end
+    end
+    return moved
+end
+
 local pl_sig = nil          -- плейлист, который уже почищен
 local start_msg = nil       -- сообщение при открытии папки (сколько уже просмотрено)
 local skip_current = false  -- текущий файл надо пропустить (уже просмотрен / не видео)
@@ -779,6 +905,8 @@ mp.add_hook("on_load", 50, function()
                 if i == cur_i then cur_junk = true else mp.commandv("playlist-remove", tostring(i)) end
             end
         end
+        local was_first = cur_i == 0                         -- до чистки: открыта папка целиком
+        local reordered = o.gopro_order and reorder_gopro()
         local left = mp.get_property_native("playlist") or {}
         -- если текущий сам мусор, его уберём при следующем открытии (текущий удалять нельзя)
         pl_sig = (not cur_junk) and playlist_sig(left) or nil
@@ -801,6 +929,10 @@ mp.add_hook("on_load", 50, function()
             target = first_undone or ((cur_i + 1) % #left)
         elseif o.skip_done and first_undone and first_undone ~= cur_i and entry_done(p) then
             target = first_undone
+        elseif reordered and was_first and cur_i ~= 0 then
+            -- открыта папка (играл первый файл), а после перестановки первым стал другой
+            target = (o.skip_done and first_undone) or 0
+            if target == cur_i then target = nil end
         end
         if target and #left > 1 then
             skip_current, skip_to = true, target
@@ -993,6 +1125,7 @@ bind("o", "out", set_out)
 bind("n", "note", note_moment)
 bind("N", "file-note", note_file)
 bind("u", "undo", undo)
+bind("DEL", "delete-mark", delete_near)
 bind("a", "activity", cycle_activity)
 bind("ENTER", "done", mark_done)
 bind("KP_ENTER", "done-kp", mark_done)
@@ -1028,4 +1161,4 @@ bind("L", "proxy-toggle", toggle_proxy)
 bind("F1", "help", function() help_on = not help_on; refresh_ui() end)
 bind("F11", "fullscreen", function() mp.command("cycle fullscreen") end)
 
-mp.msg.info("camera_triage v3.3: CSV = <папка видео>/" .. o.csv_name)
+mp.msg.info("camera_triage v3.4: CSV = <папка видео>/" .. o.csv_name)
