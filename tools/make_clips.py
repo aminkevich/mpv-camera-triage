@@ -79,7 +79,8 @@ def parse_args():
     tp.add_plan_args(ap)
     ap.add_argument("--reencode", action="store_true", help="экспорт для совместимости: перекодировать в H.264 8 бит + AAC "
                          "(играет везде, старт ровно по кадру; на 4K очень медленно)")
-    ap.add_argument("--out", help="имя подпапки для клипов (Clips)")
+    ap.add_argument("--out", help="подпапка для клипов рядом с видео (Clips) или полный путь, "
+                                  "например D:\\Project\\Clips — тогда _triage.csv копировать не нужно")
     ap.add_argument("--overwrite", action="store_true", help="перезаписывать существующие клипы")
     ap.add_argument("--prune", action="store_true",
                     help="удалить из Clips/ клипы из _clips.csv, которых нет в текущем плане "
@@ -248,9 +249,28 @@ def fmt_points(items, s, e):
     return " | ".join(f"{txt}@{int(t * 1000)}" for t, txt in sorted(items) if s <= t <= e)
 
 
-def process_folder(csv_path, args):
+def clips_dir(csv_path, args, many):
+    """Куда класть клипы папки. --out — имя подпапки (Clips, рядом с видео) или полный путь
+    (D:\\Project\\Clips): тогда видео и _triage.csv остаются на месте. Полный путь при
+    нескольких папках футажа — подпапки по их пути от указанной папки, чтобы не смешивать
+    клипы с одинаковыми именами файлов."""
+    out = Path(args.out).expanduser()
+    if not out.is_absolute():
+        return csv_path.parent / out
+    if not many:
+        return out
+    folder = csv_path.parent.resolve()
+    for root in args.folders:
+        try:
+            rel = folder.relative_to(root.resolve())
+        except ValueError:
+            continue
+        return out / (rel if rel.parts else folder.name)
+    return out / folder.name
+
+
+def process_folder(csv_path, args, out_dir):
     folder = csv_path.parent
-    out_dir = folder / args.out
     rows = tp.read_rows(csv_path)
     st = {"made": 0, "skipped": 0, "failed": 0, "todo": 0, "pruned": 0, "nosrc": 0}
     print(f"\n== {folder}")
@@ -323,7 +343,7 @@ def process_folder(csv_path, args):
                 if args.dry_run:
                     print(tag)
                     continue
-                out_dir.mkdir(exist_ok=True)
+                out_dir.mkdir(parents=True, exist_ok=True)
                 if not args.reencode:               # при -c copy старт уходит на ключевой кадр
                     kf = keyframe_before(src, s)
                     if kf is not None and kf < s:
@@ -367,14 +387,16 @@ def main():
         sys.exit("ffmpeg не найден в PATH. Установи: winget install Gyan.FFmpeg  (и открой новое окно терминала)")
     if not args.dry_run and not args.reencode and shutil.which("ffprobe") is None:
         print("⚠ ffprobe не найден: в индекс пойдёт запланированное начало клипа, а не фактическое")
-    csvs = tp.find_csvs(args.folders, skip_dir=args.out)
+    csvs = tp.find_csvs(args.folders, skip_dir=Path(args.out).name)
     if not csvs:
         sys.exit(f"Не найдено ни одного {tp.CSV_NAME}")
+    if Path(args.out).expanduser().is_absolute():
+        print(f"Клипы — в {Path(args.out).expanduser()}" + ("  (по подпапкам папок футажа)" if len(csvs) > 1 else ""))
 
     total = {"made": 0, "skipped": 0, "failed": 0, "todo": 0, "pruned": 0, "nosrc": 0}
     try:
         for c in csvs:
-            for k, v in process_folder(c, args).items():
+            for k, v in process_folder(c, args, clips_dir(c, args, len(csvs) > 1)).items():
                 total[k] += v
     except KeyboardInterrupt:
         print("\nПрервано. Готовые клипы и индекс сохранены, недорезанный файл удалён.")

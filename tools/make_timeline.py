@@ -385,7 +385,7 @@ def main():
     print(tp.describe_settings(args))
     if not args.dry_run and shutil.which("ffprobe") is None:
         sys.exit("ffprobe не найден в PATH. Установи: winget install Gyan.FFmpeg  (и открой новое окно терминала)")
-    csvs = tp.find_csvs(args.folders, skip_dir=args.out)
+    csvs = tp.find_csvs(args.folders, skip_dir=Path(args.out).name)
     if not csvs:
         sys.exit(f"Не найдено ни одного {tp.CSV_NAME}")
     for c in csvs:
