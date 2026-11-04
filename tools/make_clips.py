@@ -42,7 +42,7 @@ clips get different names and the old ones stay — --prune removes clips from C
 not in the current plan (only those listed in _clips.csv; other files are never touched).
 The plan for --prune is built without --labels, --no-marks and --min-rating: these filters
 choose what to cut now, but do not delete clips with other labels or from lower-rated files.
-Clips are removed after changes to the markup, the pads or a rating of 0.
+Clips are removed after changes to the markup or the pads, or when a file is rated 0.
 
 Settings (make_clips.conf next to the script, or --config PATH):
   permanent options — pads (global and per label), merging, exclusions, min rating, clip

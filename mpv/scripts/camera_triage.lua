@@ -594,7 +594,7 @@ local function ask_text(prompt, on_text, default_text)
             local t = ((type(text) == "string") and text or draft):gsub("[\r\n]+", " ")
             if t:match("%S") then
                 undone_note = t     -- draft: prefilled into the next note
-                osd("✎ Note not written — text kept:\n«" .. t .. "»\nn / N at the right place will insert it", 4)
+                osd("✎ Note not written — text kept:\n«" .. t .. "»\npress n / N at the right place to insert it", 4)
             else
                 undone_note = nil
                 osd("✎ Note cancelled — nothing written")
@@ -1077,7 +1077,7 @@ mp.observe_property("eof-reached", "bool", function(_, eof)
     else
         osd("■ End of file.  Rating 0–3 → ENTER" ..
             (cur.rating and ("   (now: " .. cur.rating .. ")") or "") ..
-            "\n> — next without marking", 3600)
+            "\n> — next, without marking it reviewed", 3600)
     end
 end)
 

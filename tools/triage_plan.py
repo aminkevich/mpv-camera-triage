@@ -148,7 +148,7 @@ def describe_settings(args):
             f"{lab} −{b:g}/+{af:g}" for lab, (b, af) in sorted(special.items()))
     lines.append(f"  i/o clip ±{args.clip_pad:g} s, merge ≤ {args.merge_gap:g} s, "
                  f"exclude: {args.exclude or '—'}"
-                 + (f", points without a segment: {args.point_exclude}" if args.point_exclude else "")
+                 + (f", points that make no segment: {args.point_exclude}" if args.point_exclude else "")
                  + (f", min rating: {args.min_rating}" if args.min_rating is not None else ""))
     return "\n".join(lines)
 

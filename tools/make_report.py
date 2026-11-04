@@ -457,7 +457,7 @@ def main():
     t = folders[-1]
     top = sorted(((lab, t[lab]) for lab in labels if t[lab]), key=lambda x: -x[1])
     print(f"Folders: {len(folders) - 1}, videos: {t['videos']}, reviewed: {t['done']}"
-          f" (rated without Enter {t['draft']}, started {t['started']}, not opened {t['not_opened']})")
+          f" (rated, no Enter {t['draft']}, started {t['started']}, not opened {t['not_opened']})")
     if copies:
         cf = [r["folder"] for r in folders[:-1] if r["copies"]]
         diff = sum(1 for r in files_t if r["copy_of"].endswith(MARKUP_DIFFERS))

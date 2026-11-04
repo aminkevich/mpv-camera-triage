@@ -142,7 +142,7 @@ About 10 seconds, nothing to install (standard `unittest`). What is checked:
 | `test_integration.py` | all three tools on real tiny videos (requires ffmpeg) |
 | `test_mpv_lua.py` | `camera_triage.lua` in a windowless mpv: chapter order, `Del`, `u`, a mark, rating + Enter, CSV sorting (requires mpv and ffmpeg; mpv is looked up in PATH, in `C:\Program Files\MPV Player` or via the `MPV` variable) |
 
-Without ffmpeg or mpv the corresponding tests are skipped, the rest still run.
+Without ffmpeg or mpv the corresponding tests are skipped (`skipped`), the rest still run.
 
 ## License
 
