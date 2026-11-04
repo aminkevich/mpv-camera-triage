@@ -274,7 +274,7 @@ def process_folder(csv_path, args, out_dir):
     rows = tp.read_rows(csv_path)
     st = {"made": 0, "skipped": 0, "failed": 0, "todo": 0, "pruned": 0, "nosrc": 0}
     print(f"\n== {folder}")
-    if not tp.triage_csv_ok(rows):
+    if not tp.triage_csv_ok(rows, csv_path):
         print(f"  ⚠ {tp.CSV_NAME} в неожиданном формате (пересохранён в другой программе?), пропуск")
         st["failed"] += 1
         return st

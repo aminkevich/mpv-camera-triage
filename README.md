@@ -27,6 +27,7 @@ tools/
   make_clips.conf                 настройки обоих: отступы (глобально и по меткам) и др.
 docs/
   triage-format.md                формат CSV, метки, поведение
+tests/                            автоматические тесты (py -m unittest discover tests)
 install.ps1                       установка в %APPDATA%\mpv (Windows)
 ```
 
@@ -120,6 +121,27 @@ py tools\make_report.py "D:\Footage" --probe
 ## Важно
 
 `_triage.csv` пишет только скрипт. В OnlyOffice / Excel его можно смотреть, но **не сохранять**: табличная программа меняет формат времени и разделитель. Для таблиц и фильтров — `tools\make_report.py` (выше).
+
+## Тесты
+
+После изменений в скриптах — из папки репозитория:
+
+```
+py -m unittest discover tests
+```
+
+Около 10 секунд, ничего ставить не нужно (стандартный `unittest`). Что проверяется:
+
+| Файл | Что |
+|---|---|
+| `test_plan.py` | общий план отрезков: отступы, склейка, исключения, фильтры, порядок глав GoPro, конфиг, проверка формата CSV |
+| `test_make_clips.py` | имена клипов, `--out`, `--prune` с фильтрами не удаляет лишнего |
+| `test_make_timeline.py` | таймкоды (и drop frame), FCPXML: отрезки встык и на кадрах, маркеры внутри; EDL совпадает с FCPXML |
+| `test_make_report.py` | статусы видео и папок, копии в проекте и экспорте, ИТОГО без повторов |
+| `test_integration.py` | все три скрипта на настоящих крошечных видео (нужен ffmpeg) |
+| `test_mpv_lua.py` | `camera_triage.lua` в mpv без окна: порядок глав, `Del`, `u`, метка, оценка + Enter, сортировка CSV (нужны mpv и ffmpeg; mpv ищется в PATH, в `C:\Program Files\MPV Player` или по переменной `MPV`) |
+
+Без ffmpeg или mpv соответствующие тесты пропускаются (`skipped`), остальные работают.
 
 ## Лицензия
 

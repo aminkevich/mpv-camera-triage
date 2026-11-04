@@ -1,0 +1,107 @@
+"""Общее для тестов: пути к инструментам, сборка _triage.csv, запуск скриптов, тестовые видео."""
+import argparse
+import contextlib
+import csv
+import io
+import itertools
+import os
+import shutil
+import subprocess
+import sys
+from fractions import Fraction
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parent.parent
+TOOLS = ROOT / "tools"
+LUA = ROOT / "mpv" / "scripts" / "camera_triage.lua"
+sys.path.insert(0, str(TOOLS))
+
+import triage_plan as tp                    # noqa: E402
+
+HEADER = ["logged_at", "event", "activity", "file", "src", "time_ms", "end_ms", "time_hms",
+          "label", "rating", "note", "speed_pct", "duration_ms", "duration_hms", "camera_time"]
+_clock = itertools.count()
+
+FFMPEG = shutil.which("ffmpeg")
+FFPROBE = shutil.which("ffprobe")
+
+
+def row(event, file, t=None, end=None, label="", rating="", note="", dur=None, camera_time="",
+        at=None, src="mp4", activity="spearfishing"):
+    """Строка _triage.csv; t, end, dur — секунды. logged_at по умолчанию растёт с каждой строкой."""
+    if at is None:
+        n = next(_clock)
+        at = f"2026-10-01 10:{n // 60 % 60:02d}:{n % 60:02d}"
+    ms = lambda s: "" if s is None else str(round(s * 1000))          # noqa: E731
+    return {"logged_at": at, "event": event, "activity": activity, "file": file,
+            "src": src if event in ("mark", "clip", "note") else "", "time_ms": ms(t),
+            "end_ms": ms(end), "time_hms": tp.hms(t) if t is not None else "", "label": label,
+            "rating": rating, "note": note, "speed_pct": "100" if t is not None else "",
+            "duration_ms": ms(dur), "duration_hms": tp.hms(dur) if dur else "",
+            "camera_time": camera_time}
+
+
+def triage_csv(folder, rows):
+    """Пишет <folder>/_triage.csv в формате camera_triage.lua (UTF-8 с BOM, «;»)."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / tp.CSV_NAME
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=HEADER, delimiter=";", lineterminator="\n")
+        w.writeheader()
+        w.writerows(rows)
+    return path
+
+
+def empty_config(folder):
+    """Пустой конфиг: тесты не должны зависеть от tools/make_clips.conf."""
+    path = Path(folder) / "empty.conf"
+    path.write_text("", encoding="utf-8")
+    return path
+
+
+def plan_args(config, *cli, folder="."):
+    ap = argparse.ArgumentParser()
+    tp.add_plan_args(ap)
+    return tp.finish_args(ap, ap.parse_args([str(folder), "--config", str(config), *cli]))
+
+
+def tool_args(module, *argv):
+    """parse_args() скрипта с заданной командной строкой."""
+    with mock.patch.object(sys, "argv", ["test", *map(str, argv)]):
+        return module.parse_args()
+
+
+@contextlib.contextmanager
+def quiet():
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        yield out
+
+
+def run_tool(script, *args, timeout=300):
+    """Запуск скрипта из tools/ отдельным процессом (как из командной строки)."""
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    return subprocess.run([sys.executable, str(TOOLS / script), *map(str, args)],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          env=env, timeout=timeout)
+
+
+def make_video(path, seconds, fps="60000/1001", timecode=None, size="160x90"):
+    """Крошечное тестовое видео со звуком (нужен ffmpeg); ключевой кадр каждую секунду."""
+    cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+           "-f", "lavfi", "-i", f"testsrc2=d={seconds}:s={size}:r={fps}",
+           "-f", "lavfi", "-i", f"sine=d={seconds}:sample_rate=48000", "-ac", "2",
+           "-c:v", "libx264", "-preset", "ultrafast", "-g", str(round(Fraction(fps))),
+           "-c:a", "aac", "-shortest"]
+    if timecode:
+        cmd += ["-timecode", timecode]
+    subprocess.run(cmd + [str(path)], check=True, capture_output=True)
+    return Path(path)
+
+
+def find_mpv():
+    """mpv для проверки Lua-скрипта: переменная MPV, PATH или стандартная установка Windows."""
+    cands = [os.environ.get("MPV"), shutil.which("mpv.com"), shutil.which("mpv"),
+             r"C:\Program Files\MPV Player\mpv.com", r"C:\Program Files\mpv\mpv.com"]
+    return next((c for c in cands if c and Path(c).exists()), None)

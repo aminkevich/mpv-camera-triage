@@ -318,7 +318,7 @@ def process_folder(csv_path, args):
     folder = csv_path.parent.resolve()          # имя папки — в названии таймлайна
     print(f"\n== {folder}")
     rows = tp.read_rows(csv_path)
-    if not tp.triage_csv_ok(rows):
+    if not tp.triage_csv_ok(rows, csv_path):
         print(f"  ⚠ {tp.CSV_NAME} в неожиданном формате (пересохранён в другой программе?), пропуск")
         return False
     selects, full, missing, probes = [], [], [], {}

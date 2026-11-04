@@ -173,10 +173,17 @@ def read_rows(path):
         return list(csv.DictReader(f, delimiter=";"))
 
 
-def triage_csv_ok(rows):
-    """False, если _triage.csv пересохранён в другой программе (нет нужных колонок)."""
+def triage_csv_ok(rows, path=None):
+    """False, если _triage.csv пересохранён в другой программе (нет нужных колонок).
+    Без строк данных проверяется шапка файла (path)."""
     need = {"event", "file", "time_ms", "end_ms", "label", "rating"}
-    return not rows or need <= set(rows[0].keys())
+    if rows:
+        return need <= set(rows[0].keys())
+    if path is None:
+        return True
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        header = next(csv.reader(f, delimiter=";"), None)
+    return header is None or need <= set(header)
 
 
 def find_csvs(folders, skip_dir=None):

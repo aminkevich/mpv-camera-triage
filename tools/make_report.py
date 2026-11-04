@@ -119,7 +119,7 @@ def new_file(name):
     return {"file": name, "activity": "", "marks": 0, "clips": 0, "clips_ms": 0, "notes": 0,
             "labels": Counter(), "file_notes": [], "rating": None, "done_at": -1,
             "draft": None, "draft_at": -1, "duration_ms": None, "camera_time": "",
-            "src": set(), "last": "", "rows": False}
+            "src": set(), "first": "", "last": "", "rows": False}
 
 
 def read_folder(folder, csv_path, args):
@@ -127,7 +127,7 @@ def read_folder(folder, csv_path, args):
     files, events, state = {}, [], "нет"
     rows = tp.read_rows(csv_path) if csv_path else []
     if csv_path:
-        state = "ok" if tp.triage_csv_ok(rows) else "bad"
+        state = "ok" if tp.triage_csv_ok(rows, csv_path) else "bad"
     if state == "bad":
         rows = []
     for i, r in enumerate(rows):
@@ -138,7 +138,9 @@ def read_folder(folder, csv_path, args):
         f["rows"] = True
         events.append(r)
         f["activity"] = (r.get("activity") or "").strip() or f["activity"]
-        f["last"] = max(f["last"], r.get("logged_at") or "")
+        at = r.get("logged_at") or ""
+        f["last"] = max(f["last"], at)
+        f["first"] = min(f["first"], at) if f["first"] else at
         if r.get("src"):
             f["src"].add(r["src"].strip())
         ev = r.get("event")
@@ -246,12 +248,15 @@ def folder_row(folder_name, files, state):
 
 def copy_keys(f):
     """Признаки одного и того же видео в разных папках. Имени мало: GoPro после форматирования
-    карты снова пишет GX010001. Размер файла — для лежащих на диске оригиналов; время съёмки
-    и длительность из разметки — для копий _triage.csv без видео; если камера не пишет время —
+    карты снова пишет GX010001. Размер файла — для лежащих на диске оригиналов; время первой
+    записи разметки о файле — для копий _triage.csv (у копий оно одно, у разных видео — нет);
+    время съёмки и длительность — если разметку вели заново; если камера не пишет время —
     точная длительность в мс (полные главы GoPro бывают одной длины, поэтому только без времени)."""
     keys, name = [], f["file"].upper()
     if f.get("size"):
         keys.append(("size", name, f["size"]))
+    if f["first"]:
+        keys.append(("log", name, f["first"]))
     if f["camera_time"] and f["duration_ms"]:
         keys.append(("time", name, f["camera_time"], f["duration_ms"] // 1000))
     elif f["duration_ms"] and f["rows"]:
