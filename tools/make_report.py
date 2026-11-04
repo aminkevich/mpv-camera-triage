@@ -33,6 +33,7 @@ import argparse
 import csv
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections import Counter
@@ -194,7 +195,8 @@ def read_folder(folder, csv_path, args):
         if f["draft_at"] < f["done_at"]:
             f["draft"] = None                       # черновик старше окончательной оценки
         if args.probe and src is not None and (f["duration_ms"] is None or not f["camera_time"]):
-            f["duration_ms"], ct = probe(src)
+            dur, ct = probe(src)                    # только недостающее: известное из разметки не трогать
+            f["duration_ms"] = f["duration_ms"] or dur
             f["camera_time"] = f["camera_time"] or ct
     return files, events, state
 
@@ -381,6 +383,10 @@ def write_xlsx(path, tables):
 def main():
     tp.setup_console()
     args = parse_args()
+    if args.probe and shutil.which("ffprobe") is None:
+        print("⚠ ffprobe не найден в PATH: --probe не работает, длительность и время съёмки — только из разметки."
+              " Установи: winget install Gyan.FFmpeg  (и открой новое окно терминала)")
+        args.probe = False
     skip = tp.label_set(args.skip)
     found = scan(args.folders, skip)
     if not found:
@@ -459,7 +465,7 @@ def main():
         print(f"Метки не из списка camera_triage.lua: {', '.join(unknown)} — колонки в конце таблиц")
     print(f"Длительность: {t['duration_hms'] or '—'}"
           + (f" (у {t['unknown_duration']} видео неизвестна"
-             + (": нет файла на диске)" if args.probe else " — --probe прочитает)")
+             + (": нет файла на диске или ffprobe не прочитал)" if args.probe else " — --probe прочитает)")
              if t["unknown_duration"] else "")
           + f", просмотрено: {t['reviewed_hms'] or '—'}")
     print(f"Оценки: 0 — {t['rated_0']}, 1 — {t['rated_1']}, 2 — {t['rated_2']}, 3 — {t['rated_3']}")

@@ -1,11 +1,14 @@
 """make_report.py: статусы, копии, ИТОГО — на архиве из фиктивных файлов (ffprobe не нужен)."""
 import csv
+import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from support import row, run_tool, triage_csv
+from support import TOOLS, row, run_tool, triage_csv
 
 
 def read(path):
@@ -123,6 +126,37 @@ class ReportTest(unittest.TestCase):
         folders = [r["folder"] for r in read(Path(self.tmp.name) / "skip" / "_report_folders.csv")]
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(folders, ["01_Footage/Turkey", "Broken", "Other", "ИТОГО"])
+
+
+
+class ProbeKeepsKnownValuesTest(unittest.TestCase):
+    """--probe дочитывает только недостающее: длительность из разметки не стирается, даже если
+    ffprobe не смог прочитать файл или его нет в PATH."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name) / "Trip"
+        video(self.dir / "A.MP4", 100)                       # не видео: ffprobe его не прочитает
+        triage_csv(self.dir, [row("file_done", "A.MP4", rating="2", dur=30)])   # без camera_time
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def duration(self):
+        return read(self.dir / "_report_files.csv")[0]["duration_ms"]
+
+    def test_unreadable_file(self):
+        res = run_tool("make_report.py", self.dir, "--probe")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.duration(), "30000")
+
+    def test_no_ffprobe_in_path(self):
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", PATH=str(Path(sys.executable).parent))
+        res = subprocess.run([sys.executable, str(TOOLS / "make_report.py"), str(self.dir), "--probe"],
+                             capture_output=True, text=True, encoding="utf-8", env=env)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("ffprobe не найден", res.stdout)
+        self.assertEqual(self.duration(), "30000")
 
 
 if __name__ == "__main__":
