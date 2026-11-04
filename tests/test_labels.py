@@ -1,5 +1,5 @@
-"""Список меток: camera_triage.lua (клавиши, подсказка F1) и triage_plan.LABELS (отчёт, цвета,
-проверка конфига) должны совпадать. Новая метка, добавленная только в одно место, роняет тест."""
+"""Label list: camera_triage.lua (keys, F1 help) and triage_plan.LABELS (report, colors,
+config check) must match. A new label added in only one place fails the test."""
 import re
 import tempfile
 import unittest
@@ -9,7 +9,7 @@ from support import LUA, row, run_tool, tp, triage_csv
 
 
 def lua_block(src, start):
-    """Текст таблицы Lua от `start` до закрывающей скобки в начале строки."""
+    """Text of a Lua table from `start` to the closing brace at the start of a line."""
     i = src.index(start)
     return src[i:src.index("\n}", i)]
 
@@ -34,7 +34,7 @@ class LabelsTest(unittest.TestCase):
     def test_every_label_in_f1_help(self):
         for key, label in LUA_LABELS:
             found = re.search(rf"(^|[\s\"]){re.escape(key)} {re.escape(label)}(\s|\"|$)", HELP)
-            self.assertTrue(found, f"нет «{key} {label}» в подсказке HELP в camera_triage.lua")
+            self.assertTrue(found, f"'{key} {label}' is missing from HELP in camera_triage.lua")
 
     def test_every_label_has_resolve_color(self):
         import make_timeline
@@ -55,7 +55,7 @@ class LabelsTest(unittest.TestCase):
             self.assertIn("octopus", res.stdout)
             header = (folder / "_report_files.csv").read_text(encoding="utf-8-sig").splitlines()[0]
             cols = header.split(";")
-            self.assertEqual(cols[cols.index("ride") + 1], "octopus")   # после списка, до хвоста
+            self.assertEqual(cols[cols.index("ride") + 1], "octopus")   # after the list, before the tail columns
             line = (folder / "_report_files.csv").read_text(encoding="utf-8-sig").splitlines()[1]
             self.assertEqual(line.split(";")[cols.index("octopus")], "1")
 

@@ -2,10 +2,10 @@
 __pycache__/
 *.pyc
 
-# временные файлы сортировки CSV
+# temporary files of the CSV sort
 *.tmp
 
-# тестовые видео и разметка не храним в репозитории
+# test videos and markup are not kept in the repository
 *.mp4
 *.MP4
 *.lrv

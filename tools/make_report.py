@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """
-make_report.py — сводный отчёт по архиву футажа из всех _triage.csv (camera_triage.lua v3).
+make_report.py — archive summary report from every _triage.csv (camera_triage.lua v3).
 
-Обходит указанные папки рекурсивно, читает каждый _triage.csv и ищет видео (MP4/MOV) на диске,
-в том числе в папках, где разметки ещё нет. Одна папка с одним _triage.csv — тоже архив,
-просто из одной строки.
+Walks the given folders recursively, reads every _triage.csv and looks for videos (MP4/MOV) on
+disk, including folders without markup yet. A single folder with one _triage.csv is an archive
+too, just with one row.
 
-Три таблицы, от общего к частному (CSV: «;», UTF-8 с BOM — открываются в Excel/OnlyOffice):
-  _report_folders.csv  папка — строка: что снято (активность, даты), сколько видео, сколько
-                       просмотрено, оценки 0–3, длительность, метки по видам; в конце — ИТОГО.
-  _report_files.csv    видео — строка: статус (просмотрен / оценка без Enter / начат / не открыт),
-                       оценка, длительность, время съёмки, метки по видам, заметки к файлу,
-                       есть ли файл на диске.
-  _report_events.csv   все строки всех _triage.csv подряд — те же колонки, что в _triage.csv,
-                       плюс папка, оценка и статус файла. Для фильтров вида «все catch в файлах
-                       с оценкой 3».
+Three tables, from general to detailed (CSV: ";", UTF-8 with BOM — open in Excel/OnlyOffice):
+  _report_folders.csv  one row per folder: what was shot (activity, dates), how many videos, how
+                       many reviewed, ratings 0–3, duration, marks by label; TOTAL at the end.
+  _report_files.csv    one row per video: status (reviewed / rated, no Enter / started / not opened),
+                       rating, duration, shooting time, marks by label, notes for the file,
+                       whether the file is on disk.
+  _report_events.csv   every row of every _triage.csv — the same columns as _triage.csv,
+                       plus folder, file rating and status. For filters like "every catch in
+                       files rated 3".
 
---xlsx — то же одной книгой _report.xlsx (листы «Папки», «Файлы», «События», фильтры в шапке);
-нужен openpyxl: py -m pip install openpyxl
---probe — недостающие длительность и время съёмки (у неоткрытых видео их нет в разметке)
-через ffprobe; без него такие видео в суммы длительности не входят.
+--xlsx — the same as one workbook _report.xlsx (sheets "Folders", "Files", "Events", header filters);
+requires openpyxl: py -m pip install openpyxl
+--probe — missing duration and shooting time (unopened videos have none in the markup)
+via ffprobe; without it such videos are not included in the duration totals.
 
-Отчёт — снимок: _triage.csv не меняются, отчёт можно перестраивать сколько угодно.
-Пересохранять его в Excel можно (в отличие от _triage.csv).
+The report is a snapshot: _triage.csv files are not changed, the report can be rebuilt any time.
+It is fine to re-save the report in Excel (unlike _triage.csv).
 
-Примеры:
+Examples:
   py make_report.py "D:\\Footage"
   py make_report.py "D:\\Footage" --probe --xlsx
   py make_report.py "D:\\Footage\\2026-09_Turkey" --out "D:\\Reports"
@@ -40,16 +40,19 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import triage_plan as tp                    # noqa: E402  общее чтение _triage.csv
+import triage_plan as tp                    # noqa: E402  shared _triage.csv reading
 
 VIDEO_EXTS = {".mp4", ".mov"}
-# порядок меток — как на клавиатуре в camera_triage.lua (общий список в triage_plan);
-# метки, которых в нём нет (старые, переименованные), получают колонки в конце — см. main
+# label order as on the keyboard in camera_triage.lua (shared list in triage_plan);
+# labels missing from it (old, renamed) get columns at the end — see main
 LABELS = list(tp.LABELS)
 TRIAGE_COLS = ["logged_at", "event", "activity", "file", "src", "time_ms", "end_ms", "time_hms",
                "label", "rating", "note", "speed_pct", "duration_ms", "duration_hms", "camera_time"]
 
-DONE, DRAFT, STARTED, NEW = "просмотрен", "оценка без Enter", "начат", "не открыт"
+DONE, DRAFT, STARTED, NEW = "reviewed", "rated, no Enter", "started", "not opened"
+COMPLETE, NOT_MARKED, BAD_CSV, COPY = "complete", "not marked up", "CSV in another format", "copy: "
+ON_DISK_NONE = "no"
+MARKUP_DIFFERS = " (markup differs)"
 
 
 def folder_cols(labels=LABELS):
@@ -73,25 +76,25 @@ XLSX_NAME = "_report.xlsx"
 
 
 def parse_args():
-    ap = argparse.ArgumentParser(description="Сводный отчёт по архиву из всех _triage.csv")
-    ap.add_argument("folders", nargs="+", type=Path, help="папка архива (или несколько)")
-    ap.add_argument("--out", type=Path, help="куда положить отчёт (по умолчанию — первая папка)")
+    ap = argparse.ArgumentParser(description="Archive summary report from every _triage.csv")
+    ap.add_argument("folders", nargs="+", type=Path, help="archive folder (or several)")
+    ap.add_argument("--out", type=Path, help="where to put the report (default: the first folder)")
     ap.add_argument("--probe", action="store_true",
-                    help="недостающие длительность и время съёмки через ffprobe (неоткрытые видео)")
-    ap.add_argument("--xlsx", action="store_true", help=f"ещё {XLSX_NAME} (нужен openpyxl)")
+                    help="missing duration and shooting time via ffprobe (unopened videos)")
+    ap.add_argument("--xlsx", action="store_true", help=f"also {XLSX_NAME} (requires openpyxl)")
     ap.add_argument("--skip", default="Clips",
-                    help="подпапки, которые не обходить, через запятую (Clips)")
+                    help="subfolders not to walk, comma-separated (Clips)")
     return ap.parse_args()
 
 
-# ---------------------------------------------------------------- сбор
+# ---------------------------------------------------------------- collecting
 
 def hms_ms(ms):
     return tp.hms((ms or 0) / 1000) if ms else ""
 
 
 def probe(path):
-    """(duration_ms, camera_time) неоткрытого видео через ffprobe; (None, "") при ошибке."""
+    """(duration_ms, camera_time) of an unopened video via ffprobe; (None, "") on error."""
     cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration:format_tags=creation_time",
            "-of", "json", str(path)]
     try:
@@ -106,11 +109,11 @@ def probe(path):
 
 
 def scan(roots, skip):
-    """{папка: путь к _triage.csv или None} — все папки с разметкой или с видео."""
+    """{folder: path to _triage.csv or None} — every folder with markup or with videos."""
     found = {}
     for root in roots:
         if not root.exists():
-            print(f"⚠ Папка не найдена: {root}")
+            print(f"⚠ Folder not found: {root}")
             continue
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = sorted(d for d in dirnames if d not in skip)
@@ -130,8 +133,8 @@ def new_file(name):
 
 
 def read_folder(folder, csv_path, args):
-    """→ (files: {ИМЯ: dict}, events: [row], csv_state) для одной папки."""
-    files, events, state = {}, [], "нет"
+    """→ (files: {NAME: dict}, events: [row], csv_state) for one folder."""
+    files, events, state = {}, [], "none"
     rows = tp.read_rows(csv_path) if csv_path else []
     if csv_path:
         state = "ok" if tp.triage_csv_ok(rows, csv_path) else "bad"
@@ -174,16 +177,16 @@ def read_folder(folder, csv_path, args):
             if tp.to_int(r.get("time_ms")) is None and (r.get("note") or "").strip():
                 f["file_notes"].append(r["note"].strip())
 
-    # видео на диске, которых нет в разметке (прокси — не отдельные видео)
+    # videos on disk that are not in the markup (proxies are not separate videos)
     for p in sorted(folder.iterdir()):
         if p.is_file() and p.suffix.lower() in VIDEO_EXTS and p.name.upper() not in files:
             files[p.name.upper()] = new_file(p.name)
     for f in files.values():
         src, is_proxy = tp.find_source(folder, f["file"])
-        f["on_disk"] = "нет" if src is None else ("прокси " + src.suffix.lstrip(".").upper()
-                                                  if is_proxy else "оригинал")
+        f["on_disk"] = ON_DISK_NONE if src is None else ("proxy " + src.suffix.lstrip(".").upper()
+                                                         if is_proxy else "original")
         if src is not None and not is_proxy:
-            f["size"] = src.stat().st_size          # признак копии того же видео (mark_copies)
+            f["size"] = src.stat().st_size          # a sign of a copy of the same video (mark_copies)
         if f["rating"] is not None or f["done_at"] >= 0:
             f["status"] = DONE
         elif f["draft_at"] >= 0:
@@ -193,15 +196,15 @@ def read_folder(folder, csv_path, args):
         else:
             f["status"] = NEW
         if f["draft_at"] < f["done_at"]:
-            f["draft"] = None                       # черновик старше окончательной оценки
+            f["draft"] = None                       # the draft is older than the final rating
         if args.probe and src is not None and (f["duration_ms"] is None or not f["camera_time"]):
-            dur, ct = probe(src)                    # только недостающее: известное из разметки не трогать
+            dur, ct = probe(src)                    # only what is missing: keep values from the markup
             f["duration_ms"] = f["duration_ms"] or dur
             f["camera_time"] = f["camera_time"] or ct
     return files, events, state
 
 
-# ---------------------------------------------------------------- таблицы
+# ---------------------------------------------------------------- tables
 
 def file_row(folder_name, f, labels=LABELS):
     row = {"folder": folder_name, "file": f["file"], "status": f["status"],
@@ -226,16 +229,16 @@ def folder_row(folder_name, files, state, labels=LABELS):
     acts = Counter(f["activity"] for f in fs if f["activity"])
     dup = [f for f in fs if f.get("copy_of")]
     if state == "bad":
-        status = "CSV в другом формате"
+        status = BAD_CSV
     elif dup and len(dup) == len(fs):
         src = Counter(f["copy_of"].split(" (")[0] for f in dup)
-        status = "копия: " + ", ".join(s for s, _ in src.most_common())
-    elif state == "нет":
-        status = "не размечена"
+        status = COPY + ", ".join(s for s, _ in src.most_common())
+    elif state == "none":
+        status = NOT_MARKED
     elif st[DONE] == len(fs):
-        status = "размечена"
+        status = COMPLETE
     else:
-        status = f"частично ({st[DONE]} из {len(fs)})"
+        status = f"partial ({st[DONE]} of {len(fs)})"
     row = {"folder": folder_name, "status": status,
            "activity": ", ".join(a for a, _ in acts.most_common()),
            "shot_from": dates[0] if dates else "", "shot_to": dates[-1] if dates else "",
@@ -255,11 +258,11 @@ def folder_row(folder_name, files, state, labels=LABELS):
 
 
 def copy_keys(f):
-    """Признаки одного и того же видео в разных папках. Имени мало: GoPro после форматирования
-    карты снова пишет GX010001. Размер файла — для лежащих на диске оригиналов; время первой
-    записи разметки о файле — для копий _triage.csv (у копий оно одно, у разных видео — нет);
-    время съёмки и длительность — если разметку вели заново; если камера не пишет время —
-    точная длительность в мс (полные главы GoPro бывают одной длины, поэтому только без времени)."""
+    """Signs of the same video in different folders. The name is not enough: after formatting the
+    card a GoPro writes GX010001 again. File size — for originals on disk; time of the first
+    markup row for the file — for copies of _triage.csv (copies share it, different videos do not);
+    shooting time and duration — if the markup was done again; if the camera writes no time —
+    the exact duration in ms (full GoPro chapters can have the same length, so only without a time)."""
     keys, name = [], f["file"].upper()
     if f.get("size"):
         keys.append(("size", name, f["size"]))
@@ -273,10 +276,10 @@ def copy_keys(f):
 
 
 def mark_copies(entries):
-    """entries: [(папка, файл)] в порядке папок. Одно видео в нескольких папках → основная копия
-    там, где видео лежит на диске и видео в папке больше всего (исходная папка футажа, а не
-    проект с частью файлов), при равенстве — первая по пути. У остальных copy_of = папка
-    основной (+ «разметка отличается»). Возвращает число копий."""
+    """entries: [(folder, file)] in folder order. One video in several folders → the primary copy
+    is where the video is on disk and the folder has the most videos (the original footage folder,
+    not a project with some of the files); on a tie — the first by path. The others get
+    copy_of = the primary's folder (+ "markup differs"). Returns the number of copies."""
     per_folder = Counter(name for name, _ in entries)
     parent = list(range(len(entries)))
 
@@ -304,14 +307,14 @@ def mark_copies(entries):
     for idx in groups.values():
         if len(idx) < 2:
             continue
-        prim = max(idx, key=lambda i: (entries[i][1]["on_disk"] != "нет",
+        prim = max(idx, key=lambda i: (entries[i][1]["on_disk"] != ON_DISK_NONE,
                                        per_folder[entries[i][0]], -i))
         pname, pf = entries[prim]
         pf["copies"] = len(idx) - 1
         for i in idx:
             if i != prim:
                 f = entries[i][1]
-                f["copy_of"] = pname + (" (разметка отличается)" if sig(f) != sig(pf) else "")
+                f["copy_of"] = pname + (MARKUP_DIFFERS if sig(f) != sig(pf) else "")
                 n += 1
     return n
 
@@ -325,7 +328,7 @@ def event_row(folder_name, r, files):
     return row
 
 
-# ---------------------------------------------------------------- вывод
+# ---------------------------------------------------------------- output
 
 def write_csv(path, cols, rows):
     tmp = path.with_name(path.name + ".tmp")
@@ -342,7 +345,7 @@ def write_csv(path, cols, rows):
 
 
 def typed(v):
-    """Для xlsx: числа из CSV — числами, чтобы суммировались и сортировались."""
+    """For xlsx: numbers from the CSV as numbers, so they can be summed and sorted."""
     if isinstance(v, str) and v.lstrip("-").isdigit() and len(v) < 16:
         return int(v)
     return "" if v is None else v
@@ -354,7 +357,7 @@ def write_xlsx(path, tables):
         from openpyxl.styles import Font
         from openpyxl.utils import get_column_letter
     except ImportError:
-        print(f"⚠ {XLSX_NAME} не создан: нужен openpyxl (py -m pip install openpyxl)")
+        print(f"⚠ {XLSX_NAME} not created: requires openpyxl (py -m pip install openpyxl)")
         return False
     wb = Workbook()
     wb.remove(wb.active)
@@ -384,13 +387,13 @@ def main():
     tp.setup_console()
     args = parse_args()
     if args.probe and shutil.which("ffprobe") is None:
-        print("⚠ ffprobe не найден в PATH: --probe не работает, длительность и время съёмки — только из разметки."
-              " Установи: winget install Gyan.FFmpeg  (и открой новое окно терминала)")
+        print("⚠ ffprobe not found in PATH: --probe is off, duration and shooting time come from the markup only."
+              " Install it: winget install Gyan.FFmpeg  (and open a new terminal window)")
         args.probe = False
     skip = tp.label_set(args.skip)
     found = scan(args.folders, skip)
     if not found:
-        sys.exit(f"Не найдено ни {tp.CSV_NAME}, ни видео")
+        sys.exit(f"Found neither {tp.CSV_NAME} nor videos")
     roots = [r.resolve() for r in args.folders if r.exists()]
     out = (args.out or roots[0]).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -426,9 +429,9 @@ def main():
             if not f.get("copy_of"):
                 unique[(name, f["file"].upper())] = f
         events_t += [event_row(name, r, files) for r in events]
-    # ИТОГО — по уникальным видео: копии папок (проект, экспорт, бэкап) не умножают архив
-    total = folder_row("ИТОГО", unique, "ok", labels)
-    total["status"] = f"папок {len(folders)}" + (f", копий видео {copies}" if copies else "")
+    # TOTAL counts unique videos: folder copies (project, export, backup) do not multiply the archive
+    total = folder_row("TOTAL", unique, "ok", labels)
+    total["status"] = f"folders {len(folders)}" + (f", video copies {copies}" if copies else "")
     total["copies"] = copies
     folders.append(total)
 
@@ -441,45 +444,45 @@ def main():
             write_csv(path, cols, rows)
             written.append(path.name)
         except PermissionError:
-            print(f"✗ {path} открыт в другой программе (Excel?) — закрой и запусти ещё раз")
+            print(f"✗ {path} is open in another program (Excel?) — close it and run again")
     if args.xlsx:
         try:
-            if write_xlsx(out / XLSX_NAME, [("Папки", folder_c, folders),
-                                            ("Файлы", file_c, files_t),
-                                            ("События", EVENT_COLS, events_t)]):
+            if write_xlsx(out / XLSX_NAME, [("Folders", folder_c, folders),
+                                            ("Files", file_c, files_t),
+                                            ("Events", EVENT_COLS, events_t)]):
                 written.append(XLSX_NAME)
         except PermissionError:
-            print(f"✗ {out / XLSX_NAME} открыт в другой программе (Excel?) — закрой и запусти ещё раз")
+            print(f"✗ {out / XLSX_NAME} is open in another program (Excel?) — close it and run again")
 
     t = folders[-1]
     top = sorted(((lab, t[lab]) for lab in labels if t[lab]), key=lambda x: -x[1])
-    print(f"Папок: {len(folders) - 1}, видео: {t['videos']}, просмотрено: {t['done']}"
-          f" (оценка без Enter {t['draft']}, начато {t['started']}, не открыто {t['not_opened']})")
+    print(f"Folders: {len(folders) - 1}, videos: {t['videos']}, reviewed: {t['done']}"
+          f" (rated without Enter {t['draft']}, started {t['started']}, not opened {t['not_opened']})")
     if copies:
         cf = [r["folder"] for r in folders[:-1] if r["copies"]]
-        diff = sum(1 for r in files_t if "отличается" in r["copy_of"])
-        print(f"Копии: {copies} видео ещё раз лежат в других папках ({', '.join(cf[:5])}"
-              + (f" и ещё {len(cf) - 5}" if len(cf) > 5 else "") + ") — в итог вошли один раз"
-              + (f"; у {diff} разметка отличается от основной копии" if diff else ""))
+        diff = sum(1 for r in files_t if r["copy_of"].endswith(MARKUP_DIFFERS))
+        print(f"Copies: {copies} videos also lie in other folders ({', '.join(cf[:5])}"
+              + (f" and {len(cf) - 5} more" if len(cf) > 5 else "") + ") — counted once in the total"
+              + (f"; {diff} have markup that differs from the primary copy" if diff else ""))
     if unknown:
-        print(f"Метки не из списка camera_triage.lua: {', '.join(unknown)} — колонки в конце таблиц")
-    print(f"Длительность: {t['duration_hms'] or '—'}"
-          + (f" (у {t['unknown_duration']} видео неизвестна"
-             + (": нет файла на диске или ffprobe не прочитал)" if args.probe else " — --probe прочитает)")
+        print(f"Labels not in the camera_triage.lua list: {', '.join(unknown)} — columns at the end of the tables")
+    print(f"Duration: {t['duration_hms'] or '—'}"
+          + (f" (unknown for {t['unknown_duration']} videos"
+             + (": no file on disk or ffprobe could not read it)" if args.probe else " — --probe will read it)")
              if t["unknown_duration"] else "")
-          + f", просмотрено: {t['reviewed_hms'] or '—'}")
-    print(f"Оценки: 0 — {t['rated_0']}, 1 — {t['rated_1']}, 2 — {t['rated_2']}, 3 — {t['rated_3']}")
+          + f", reviewed: {t['reviewed_hms'] or '—'}")
+    print(f"Ratings: 0 — {t['rated_0']}, 1 — {t['rated_1']}, 2 — {t['rated_2']}, 3 — {t['rated_3']}")
     if top:
-        print("Метки: " + ", ".join(f"{lab} {n}" for lab, n in top))
+        print("Labels: " + ", ".join(f"{lab} {n}" for lab, n in top))
     undone = [r["folder"] for r in folders[:-1]
-              if r["status"] != "размечена" and not r["status"].startswith("копия")]
+              if r["status"] != COMPLETE and not r["status"].startswith(COPY)]
     if undone:
-        print(f"Не размечены полностью: {len(undone)} — " + ", ".join(undone[:5])
-              + (f" и ещё {len(undone) - 5}" if len(undone) > 5 else ""))
+        print(f"Not fully marked up: {len(undone)} — " + ", ".join(undone[:5])
+              + (f" and {len(undone) - 5} more" if len(undone) > 5 else ""))
     if bad:
-        print(f"⚠ {tp.CSV_NAME} в другом формате (не прочитан): " + ", ".join(bad))
+        print(f"⚠ {tp.CSV_NAME} in another format (not read): " + ", ".join(bad))
     if written:
-        print(f"\nОтчёт в {out}: " + ", ".join(written))
+        print(f"\nReport in {out}: " + ", ".join(written))
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""make_timeline.py без ffprobe: таймкоды, FCPXML (кадры, стыки, маркеры) и EDL маркеров."""
+"""make_timeline.py without ffprobe: timecodes, FCPXML (frames, joins, markers) and the marker EDL."""
 import re
 import tempfile
 import unittest
@@ -8,13 +8,13 @@ from pathlib import Path
 
 from support import plan_args, row, tp
 
-import make_timeline as mt                  # noqa: E402  (support добавляет tools/ в sys.path)
+import make_timeline as mt                  # noqa: E402  (support adds tools/ to sys.path)
 
 NTSC60 = F(60000, 1001)
 
 
 def info(fps, duration, tc=None, size=(1920, 1080)):
-    """Параметры исходника, как их вернул бы probe()."""
+    """Source parameters as probe() would return them."""
     return {"fps": F(fps), "width": size[0], "height": size[1], "duration": duration,
             "tc0": mt.tc_frames(tc, F(fps)) if tc else 0,
             "tc_format": "DF" if tc and ";" in tc else "NDF", "audio": (2, 48000)}
@@ -30,10 +30,10 @@ class TimecodeTest(unittest.TestCase):
         self.assertEqual(mt.tc_frames("00:00:01:00", F(25)), 25)
 
     def test_drop_frame(self):
-        # 29.97 DF: за минуту выбрасываются кадры 00 и 01, кроме каждой десятой минуты
+        # 29.97 DF: frames 00 and 01 are dropped every minute except every tenth minute
         self.assertEqual(mt.tc_frames("00:01:00;02", F(30000, 1001)), 1800)
         self.assertEqual(mt.tc_frames("00:10:00;00", F(30000, 1001)), 17982)
-        # 59.94 DF — по 4 кадра
+        # 59.94 DF — 4 frames each
         self.assertEqual(mt.tc_frames("11:00:00;10", NTSC60), 39600 * 60 + 10 - 4 * (660 - 66))
 
     def test_bad_timecode_is_zero(self):
@@ -55,9 +55,9 @@ class TimelineTest(unittest.TestCase):
         self.folder = Path(self.tmp.name) / "Turkey"
         self.folder.mkdir()
         rows = [row("mark", "GX010123.MP4", 10, label="fish"), row("mark", "GX010123.MP4", 13, label="shot"),
-                row("note", "GX010123.MP4", 12, note="Мурена; «большая»"),
+                row("note", "GX010123.MP4", 12, note="Moray; «big one»"),
                 row("clip", "GX010123.MP4", 30, 45, label="dive"), row("mark", "GX010123.MP4", 35, label="bad"),
-                row("note", "GX010123.MP4", note="Вода мутная"),
+                row("note", "GX010123.MP4", note="Murky water"),
                 row("file_done", "GX010123.MP4", rating="3", dur=60),
                 row("mark", "DJI_0001.MP4", 38, label="jump"), row("file_done", "DJI_0001.MP4", rating="2", dur=40)]
         self.files = tp.collect(rows)
@@ -85,7 +85,7 @@ class TimelineTest(unittest.TestCase):
         return path, n, nm
 
     def check_fcpxml(self, path):
-        """Отрезки встык с начала 01:00:00:00, на кадрах таймлайна, внутри исходника; маркеры внутри."""
+        """Segments back to back from 01:00:00:00, on timeline frames, inside the source; markers inside."""
         root = ET.parse(path).getroot()
         self.assertEqual(root.get("version"), mt.FCPXML_VERSION)
         fmts = {f.get("id"): t(f.get("frameDuration")) for f in root.iter("format")}
@@ -125,13 +125,13 @@ class TimelineTest(unittest.TestCase):
         names = [c.get("name") for c in root.iter("asset-clip")]
         self.assertEqual(names, ["GX010123 00:00:05 fish+shot ★3", "GX010123 00:00:29 dive ★3",
                                  "DJI_0001 00:00:33 jump ★2"])
-        # исходник ищется по таймкоду: начало asset = таймкод файла
+        # the source is found by timecode: asset start = the file's timecode
         gx = root.find(".//asset[@name='GX010123.MP4']")
         self.assertEqual(t(gx.get("start")), F(mt.tc_frames("10:20:30:15", NTSC60)) / NTSC60)
         self.assertEqual(gx.get("src"), (self.folder / "GX010123.MP4").resolve().as_uri())
-        # маркеры: fish, заметка, shot, клип dive, bad, jump; заметка к файлу — только в Full
+        # markers: fish, note, shot, clip dive, bad, jump; the note for the file — only in Full
         values = [m.get("value") for m in root.iter("marker")]
-        self.assertEqual(values, ["fish", "✎ Мурена; «большая»", "shot", "клип dive", "bad", "jump"])
+        self.assertEqual(values, ["fish", "✎ Moray; «big one»", "shot", "clip dive", "bad", "jump"])
         self.assertEqual((n, nm), (3, 6))
         self.assertEqual(positions, self.edl_positions(path.with_suffix(".edl")))
 
@@ -140,16 +140,16 @@ class TimelineTest(unittest.TestCase):
         edl = path.with_suffix(".edl").read_text(encoding="utf-8")
         self.assertTrue(edl.startswith("TITLE: Selects Turkey\nFCM: NON-DROP FRAME\n"))
         self.assertIn("|C:ResolveColorBlue |M:fish |D:1", edl)
-        self.assertIn("|C:ResolveColorCream |M:✎ Мурена; «большая» |D:1", edl)
+        self.assertIn("|C:ResolveColorCream |M:✎ Moray; «big one» |D:1", edl)
         self.assertIn("|C:ResolveColorCocoa |M:bad |D:1", edl)
-        self.assertRegex(edl, r"\|C:ResolveColorSky \|M:клип dive — i/o 00:00:30–00:00:45 \|D:89\d")
+        self.assertRegex(edl, r"\|C:ResolveColorSky \|M:clip dive — i/o 00:00:30–00:00:45 \|D:89\d")
         self.assertNotIn("|M:|", edl)
 
     def test_mixed_frame_rates_stay_inside_source(self):
         path, _, _ = self.build()
         root, _ = self.check_fcpxml(path)
         dji = [c for c in root.iter("asset-clip") if c.get("name").startswith("DJI")][0]
-        # 30 fps на таймлайне 59.94: длительность округлена вниз до кадра таймлайна
+        # 30 fps on a 59.94 timeline: the duration is rounded down to a timeline frame
         self.assertLessEqual(t(dji.get("start")) + t(dji.get("duration")), 40)
 
     def test_full_timeline_has_file_notes(self):
@@ -157,7 +157,7 @@ class TimelineTest(unittest.TestCase):
         root, positions = self.check_fcpxml(path)
         self.assertEqual(n, 2)
         values = [m.get("value") for m in root.iter("marker")]
-        self.assertIn("✎ файл: Вода мутная", values)
+        self.assertIn("✎ file: Murky water", values)
         self.assertEqual(positions, self.edl_positions(path.with_suffix(".edl")))
 
 

@@ -1,149 +1,149 @@
 # mpv camera triage
 
-Ручной триаж футажа экшн-камер (GoPro и др.) в плеере **mpv**: быстро просмотреть много видео, отметить интересные моменты и получить из этого клипы для монтажа.
+Manual triage of action-camera footage (GoPro and others) in the **mpv** player: quickly go through lots of videos, mark the interesting moments, and turn that into an editing timeline or clips.
 
-Во время просмотра клавишами ставятся метки (`fish`, `shot`, `scenery`, …), отрезки-клипы (`i` / `o`), заметки и оценка файла 0–3. Всё сразу пишется в `_triage.csv` **в папке с видео**, поэтому разметка переезжает в архив вместе с футажом и служит подробным описанием того, что в нём есть.
+While watching, you place marks with single keys (`fish`, `shot`, `scenery`, …), clip ranges (`i` / `o`), notes and a 0–3 rating per file. Everything is written immediately to `_triage.csv` **in the video folder**, so the markup moves to the archive together with the footage and serves as a detailed description of what is in it.
 
-Набор меток рассчитан на подводную охоту и кайтсёрфинг, но подходит и для другого экшн-видео.
+The label set is designed for spearfishing and kitesurfing, but it works for other action video too.
 
-## Зачем
+## Why
 
-- **Отбор моментов для монтажа.** Отмеченные моменты выгружаются таймлайном для DaVinci Resolve со ссылками на оригиналы (`tools/make_timeline.py`) — в монтажке каждый отрезок можно расширить сколько нужно. Для пересылки и просмотра их можно и нарезать файлами (`tools/make_clips.py`).
-- **Описание архива.** CSV по каждой папке: что снято, что удалось, где смотреть.
-- **Эталонная разметка.** Метки, клипы и оценки — структурированные данные. Их можно использовать как ground truth для автоматических инструментов: проверять, какие моменты нашёл алгоритм, а какие пропустил, или обучать его. Заметки — для человека.
+- **Picking moments for editing.** Marked moments are exported as a DaVinci Resolve timeline that links to the originals (`tools/make_timeline.py`) — in the editor every segment can be extended as far as needed. They can also be cut into files for sharing and viewing (`tools/make_clips.py`).
+- **Describing the archive.** A CSV per folder: what was shot, what worked, where to look.
+- **Reference markup.** Marks, clips and ratings are structured data. They can serve as ground truth for automatic tools: check which moments an algorithm found and which it missed, or train it. Notes are for people.
 
-## Структура
+## Layout
 
 ```
-mpv/                              ← копия папки настроек mpv (%APPDATA%\mpv)
-  mpv.conf                        базовые настройки плеера
-  scripts/camera_triage.lua       скрипт разметки
-  script-opts/camera_triage.conf  настройки скрипта
+mpv/                              ← copy of the mpv settings folder (%APPDATA%\mpv)
+  mpv.conf                        basic player settings
+  scripts/camera_triage.lua       the markup script
+  script-opts/camera_triage.conf  script settings
 tools/
-  make_timeline.py                таймлайн FCPXML для монтажа (DaVinci Resolve) из _triage.csv
-  make_clips.py                   нарезка клипов из _triage.csv через ffmpeg
-  make_report.py                  сводный отчёт по архиву из всех _triage.csv
-  triage_plan.py                  общий план отрезков для обоих скриптов
-  make_clips.conf                 настройки обоих: отступы (глобально и по меткам) и др.
+  make_timeline.py                FCPXML timeline for editing (DaVinci Resolve) from _triage.csv
+  make_clips.py                   cuts clips from _triage.csv with ffmpeg
+  make_report.py                  archive summary report from every _triage.csv
+  triage_plan.py                  shared segment plan for both scripts
+  make_clips.conf                 settings for both: pads (global and per label) etc.
 docs/
-  triage-format.md                формат CSV, метки, поведение
-tests/                            автоматические тесты (py -m unittest discover tests)
-install.ps1                       установка в %APPDATA%\mpv (Windows)
+  triage-format.md                CSV format, labels, behavior
+tests/                            automated tests (py -m unittest discover tests)
+install.ps1                       installs into %APPDATA%\mpv (Windows)
 ```
 
-## Установка
+## Installation
 
 **Windows**
 
-1. mpv 0.38+ (сборка shinchiro): `winget install --id shinchiro.mpv -e`
-2. В PowerShell из папки репозитория:
+1. mpv 0.38+ (shinchiro build): `winget install --id shinchiro.mpv -e`
+2. In PowerShell from the repository folder:
    ```powershell
-   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass   # разрешить скрипты только в этом окне
-   .\install.ps1          # копирование файлов в %APPDATA%\mpv
-   .\install.ps1 -Link    # или: символические ссылки на репозиторий
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass   # allow scripts in this window only
+   .\install.ps1          # copy the files to %APPDATA%\mpv
+   .\install.ps1 -Link    # or: symbolic links to the repository
    ```
-   - **Копирование** — после каждого `git pull` запускать `install.ps1` ещё раз.
-   - **`-Link`** — `git pull` сразу обновляет mpv. Нужен «Режим разработчика» Windows (Параметры → Система → Для разработчиков) или PowerShell от имени администратора; без этого скрипт ничего не меняет и подскажет, что делать. Папку репозитория потом нельзя перемещать.
+   - **Copy** — run `install.ps1` again after every `git pull`.
+   - **`-Link`** — `git pull` updates mpv right away. Requires Windows "Developer Mode" (Settings → System → For developers) or PowerShell as administrator; without it the script changes nothing and tells you what to do. The repository folder must not be moved afterwards.
 
-   Отличающиеся файлы в `%APPDATA%\mpv` сначала сохраняются в `_backup_<дата>`, старая версия `gopro_triage.*` — туда же.
-3. Для таймлайна и нарезки клипов: Python 3.9+ и ffmpeg с ffprobe (`winget install Gyan.FFmpeg`).
+   Files in `%APPDATA%\mpv` that differ are saved to `_backup_<date>` first, and so is an old `gopro_triage.*` version.
+3. For the timeline and clip cutting: Python 3.9+ and ffmpeg with ffprobe (`winget install Gyan.FFmpeg`).
 
-**Linux / macOS** — не проверялось, но скрипт на Lua платформонезависим: скопировать содержимое `mpv/` в `~/.config/mpv/`.
+**Linux / macOS** — not tested, but the Lua script is platform-independent: copy the contents of `mpv/` to `~/.config/mpv/`.
 
-## Работа
+## Usage
 
-Перетащить папку с видео в окно mpv. Открывается первый непросмотренный файл; справа вверху виден статус.
+Drag a folder of videos into the mpv window. The first unreviewed file opens; the status is shown in the top right corner.
 
-| Клавиши | Действие |
+| Keys | Action |
 |---|---|
 | `h` `v` `p` `b` | highlight / scenery / people / bad |
 | `f` `s` `c` `w` `d` | fish / shot / catch / wildlife / dive |
 | `j` `t` `x` `r` | jump / trick / crash / ride |
-| `i` … `o` | начало … конец клипа (метка между ними — метка клипа) |
-| `n` / `N` | заметка к моменту / к файлу |
-| `0`–`3` | оценка файла |
-| `Enter` | файл просмотрен → следующий непросмотренный |
-| `u` | отменить (запись в CSV — после повторного `u`) |
-| `Del` | удалить метку / клип / заметку рядом (±3 с), и из прошлых сессий — после повторного `Del`; `u` вернёт |
-| `+` `-` `Tab` `Backspace` | скорость ×2 / ÷2 / 1x↔быстро / 1x |
-| `PgUp` `PgDn` | к предыдущей / следующей метке |
-| `a` | активность (spearfishing / kitesurfing / other); запоминается в CSV папки |
-| `L` | оригинал ↔ прокси низкого разрешения (GoPro .LRV / DJI .LRF) |
-| `F1` | подсказка |
+| `i` … `o` | clip start … end (a mark in between becomes the clip's label) |
+| `n` / `N` | note at the moment / for the file |
+| `0`–`3` | file rating |
+| `Enter` | file reviewed → next unreviewed one |
+| `u` | undo (a CSV row after a second `u`) |
+| `Del` | delete a nearby mark / clip / note (±3 s), also from earlier sessions — after a second `Del`; `u` brings it back |
+| `+` `-` `Tab` `Backspace` | speed ×2 / ÷2 / 1x↔fast / 1x |
+| `PgUp` `PgDn` | previous / next mark |
+| `a` | activity (spearfishing / kitesurfing / other); remembered in the folder's CSV |
+| `L` | original ↔ low-resolution proxy (GoPro .LRV / DJI .LRF) |
+| `F1` | help |
 
-Подробно — в [docs/triage-format.md](docs/triage-format.md).
+Details are in [docs/triage-format.md](docs/triage-format.md).
 
-## Таймлайн для монтажа
+## Editing timeline
 
 ```
 py tools\make_timeline.py "D:\Footage\2026-09_Turkey" --min-rating 2
 py tools\make_timeline.py "D:\Footage\2026-09_Turkey" --full
 ```
 
-Рядом с `_triage.csv` появляются `_selects.fcpxml` (отобранные отрезки подряд) и `_selects.edl` (маркеры меток и заметок, с цветом по метке). В Resolve:
+Next to `_triage.csv` you get `_selects.fcpxml` (the selected segments back to back) and `_selects.edl` (markers for labels and notes, colored by label). In Resolve:
 
 1. **File → Import → Timeline…** → `_selects.fcpxml`.
-2. Правый клик по этому таймлайну в Media Pool → **Timelines → Import → Timeline Markers from EDL…** → `_selects.edl`. Resolve не берёт маркеры из FCPXML, поэтому они идут отдельным файлом.
+2. Right-click this timeline in the Media Pool → **Timelines → Import → Timeline Markers from EDL…** → `_selects.edl`. Resolve ignores markers in FCPXML, so they come as a separate file.
 
-Отрезки ссылаются на оригинальные видео, поэтому их края можно двигать до начала и конца файла: отступы задают только начальную ширину. `--full` дополнительно пишет `_full.fcpxml` и `_full.edl` — все размеченные файлы целиком со всей разметкой маркерами. План отрезков тот же, что у нарезки: те же ключи и `make_clips.conf`.
+The segments link to the original videos, so their edges can be dragged out to the start and end of the file: the pads only set the initial width. `--full` additionally writes `_full.fcpxml` and `_full.edl` — every marked file in full with all its markup as markers. The segment plan is the same as for cutting: the same options and `make_clips.conf`.
 
-## Нарезка клипов
+## Cutting clips
 
-Файлы-клипы нужны, чтобы переслать, посмотреть на телефоне или сохранить лучшее отдельно от сырого футажа. Для монтажа удобнее таймлайн (выше).
+Clip files are for sharing, watching on a phone, or keeping the best moments apart from the raw footage. For editing the timeline (above) is more convenient.
 
 ```
 py tools\make_clips.py "D:\Footage\2026-09_Turkey" --dry-run
 py tools\make_clips.py "D:\Footage\2026-09_Turkey" --min-rating 2
 ```
 
-Клипы появляются в подпапке `Clips\` рядом с видео: `GX011151_00-01-20_14s_fish+shot.mp4`.
-Чтобы резать сразу в проект, укажи полный путь: `--out "D:\02_Project\Clips"`. Видео и `_triage.csv` остаются в папке футажа, копировать их в проект не нужно.
-Отступы вокруг меток и другие постоянные параметры — в `tools\make_clips.conf`.
+The clips appear in a `Clips\` subfolder next to the videos: `GX011151_00-01-20_14s_fish+shot.mp4`.
+To cut straight into a project, give a full path: `--out "D:\02_Project\Clips"`. The videos and `_triage.csv` stay in the footage folder, no need to copy them to the project.
+Pads around marks and other permanent options are in `tools\make_clips.conf`.
 
-## Отчёт по архиву
+## Archive report
 
 ```
 py tools\make_report.py "D:\Footage" --probe
 ```
 
-Скрипт обходит все вложенные папки, читает каждый `_triage.csv` и смотрит, какие видео лежат на диске, в том числе в папках без разметки. Одна папка тоже подходит. В первой указанной папке (или в `--out`) появляются три таблицы, от общего к частному:
+The script walks all subfolders, reads every `_triage.csv` and checks which videos are on disk, including folders without markup. A single folder works too. Three tables appear in the first given folder (or in `--out`), from general to detailed:
 
-| Файл | Строка | Зачем |
+| File | Row | Purpose |
 |---|---|---|
-| `_report_folders.csv` | папка + строка ИТОГО | что снято и когда, сколько видео просмотрено, оценки 0–3, длительность, метки по видам; какие папки не размечены до конца |
-| `_report_files.csv` | видео | статус (просмотрен / оценка без Enter / начат / не открыт), оценка, длительность, время съёмки, метки по видам, заметки к файлу, есть ли файл на диске |
-| `_report_events.csv` | строка `_triage.csv` | все метки, клипы и заметки архива в колонках `_triage.csv` + папка, оценка и статус файла — для фильтров вроде «все `catch` в файлах с оценкой 3» |
+| `_report_folders.csv` | folder + a TOTAL row | what was shot and when, how many videos are reviewed, ratings 0–3, duration, marks by label; which folders are not fully marked up |
+| `_report_files.csv` | video | status (reviewed / rated, no Enter / started / not opened), rating, duration, shooting time, marks by label, notes for the file, whether the file is on disk |
+| `_report_events.csv` | a `_triage.csv` row | every mark, clip and note in the archive in the `_triage.csv` columns + folder, file rating and status — for filters like "every `catch` in files rated 3" |
 
-Если папку указать с запасом и в неё попали копии (видео или `_triage.csv`, скопированные в проект, экспорт, бэкап), отчёт их узнаёт. Копии помечены в колонке `copy_of`, у папки из одних копий статус «копия: …», а в ИТОГО каждое видео входит один раз. Пропустить такие папки целиком можно ключом `--skip Clips,02_Project,03_Export`.
+If the given folder is too broad and contains copies (videos or `_triage.csv` copied into a project, an export, a backup), the report recognizes them. Copies are flagged in the `copy_of` column, a folder made only of copies gets the status "copy: …", and TOTAL counts each video once. To skip such folders entirely use `--skip Clips,02_Project,03_Export`.
 
-`--probe` дочитывает через ffprobe длительность и время съёмки видео, которые ещё не открывались. `--xlsx` собирает те же таблицы одной книгой `_report.xlsx`: листы, фильтры в шапке, числа как числа. Для неё нужен `py -m pip install openpyxl`. Отчёт — снимок, его можно пересохранять и перестраивать сколько угодно.
+`--probe` reads the duration and shooting time of videos that were never opened via ffprobe. `--xlsx` builds the same tables as one workbook `_report.xlsx`: sheets, header filters, numbers as numbers. It requires `py -m pip install openpyxl`. The report is a snapshot; it can be re-saved and rebuilt as often as you like.
 
-## Важно
+## Important
 
-`_triage.csv` пишет только скрипт. В OnlyOffice / Excel его можно смотреть, но **не сохранять**: табличная программа меняет формат времени и разделитель. Для таблиц и фильтров — `tools\make_report.py` (выше).
+Only the script writes `_triage.csv`. You can view it in OnlyOffice / Excel but **must not save it**: a spreadsheet changes the time format and the delimiter. For tables and filters use `tools\make_report.py` (above).
 
-## Тесты
+## Tests
 
-После изменений в скриптах — из папки репозитория:
+After changing the scripts — from the repository folder:
 
 ```
 py -m unittest discover tests
 ```
 
-Около 10 секунд, ничего ставить не нужно (стандартный `unittest`). Что проверяется:
+About 10 seconds, nothing to install (standard `unittest`). What is checked:
 
-| Файл | Что |
+| File | What |
 |---|---|
-| `test_plan.py` | общий план отрезков: отступы, склейка, исключения, фильтры, порядок глав GoPro, конфиг, проверка формата CSV |
-| `test_make_clips.py` | имена клипов, `--out`, `--prune` с фильтрами не удаляет лишнего |
-| `test_make_timeline.py` | таймкоды (и drop frame), FCPXML: отрезки встык и на кадрах, маркеры внутри; EDL совпадает с FCPXML |
-| `test_make_report.py` | статусы видео и папок, копии в проекте и экспорте, ИТОГО без повторов |
-| `test_labels.py` | список меток в `camera_triage.lua` (клавиши, подсказка F1) совпадает с `triage_plan.py` (отчёт, цвета Resolve) |
-| `test_integration.py` | все три скрипта на настоящих крошечных видео (нужен ffmpeg) |
-| `test_mpv_lua.py` | `camera_triage.lua` в mpv без окна: порядок глав, `Del`, `u`, метка, оценка + Enter, сортировка CSV (нужны mpv и ffmpeg; mpv ищется в PATH, в `C:\Program Files\MPV Player` или по переменной `MPV`) |
+| `test_plan.py` | the shared segment plan: pads, merging, exclusions, filters, GoPro chapter order, config, CSV format check |
+| `test_make_clips.py` | clip names, `--out`, `--prune` with filters deletes nothing extra |
+| `test_make_timeline.py` | timecodes (including drop frame), FCPXML: segments back to back and on frame boundaries, markers inside; the EDL matches the FCPXML |
+| `test_make_report.py` | video and folder statuses, copies in a project and an export, TOTAL without duplicates, `--probe` keeps known values |
+| `test_labels.py` | the label list in `camera_triage.lua` (keys, F1 help) matches `triage_plan.py` (report, Resolve colors) |
+| `test_integration.py` | all three tools on real tiny videos (requires ffmpeg) |
+| `test_mpv_lua.py` | `camera_triage.lua` in a windowless mpv: chapter order, `Del`, `u`, a mark, rating + Enter, CSV sorting (requires mpv and ffmpeg; mpv is looked up in PATH, in `C:\Program Files\MPV Player` or via the `MPV` variable) |
 
-Без ffmpeg или mpv соответствующие тесты пропускаются (`skipped`), остальные работают.
+Without ffmpeg or mpv the corresponding tests are skipped, the rest still run.
 
-## Лицензия
+## License
 
-MIT — см. [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

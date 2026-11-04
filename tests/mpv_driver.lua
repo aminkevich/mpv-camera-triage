@@ -1,5 +1,5 @@
--- Тестовый «пользователь» для test_mpv_lua.py: нажимает клавиши camera_triage.lua по шагам
--- и пишет в лог mpv то, что проверяет тест (порядок плейлиста, CSV, текущий файл).
+-- Test "user" for test_mpv_lua.py: presses camera_triage.lua keys step by step
+-- and writes to the mpv log what the test checks (playlist order, CSV, current file).
 local mp = require 'mp'
 local csv = mp.get_opt("driver-csv")
 local BS = string.char(92)
@@ -26,12 +26,12 @@ local steps = {
         mp.msg.info("PLAYLIST " .. table.concat(pl, ","))
         mp.msg.info("PLAYING " .. base(mp.get_property("path")))
     end,
-    seek(5.5), key("DEL"), key("DEL"),            -- метка fish@5 из «прошлой сессии»: Del, Del
+    seek(5.5), key("DEL"), key("DEL"),            -- mark fish@5 from an "earlier session": Del, Del
     function() dump("after_del") end,
-    key("u"), key("u"),                           -- вернуть удалённое
+    key("u"), key("u"),                           -- restore the deleted row
     function() dump("after_undo") end,
-    seek(12), key("s"),                           -- новая метка shot на паузе — точно 12 с
-    key("2"), key("ENTER"),                       -- оценка → следующий непросмотренный
+    seek(12), key("s"),                           -- new shot mark while paused — exactly 12 s
+    key("2"), key("ENTER"),                       -- rating → next unreviewed
     function() mp.msg.info("PLAYING " .. base(mp.get_property("path") or "")) end,
     function() mp.commandv("quit") end,
 }

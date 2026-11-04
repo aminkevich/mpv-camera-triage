@@ -1,115 +1,115 @@
-# Формат разметки `_triage.csv` (camera_triage v3)
+# `_triage.csv` markup format (camera_triage v3)
 
-## Принципы
+## Principles
 
-- Разметка ручная: человек смотрит видео и отмечает моменты. Метки, клипы и оценки — структурированные данные, их можно использовать как эталон (ground truth) для автоматических инструментов, например для обучения и проверки автоматического триажа. Заметки — для человека, автоматикой не используются.
-- Файл лежит **в папке с видео** и переезжает в архив вместе с ней. Путей в CSV нет.
-- `file` — всегда имя оригинального видео (MP4), даже если смотрел прокси LRV/LRF; см. колонку `src`.
-- `file_done` — файл досмотрен до конца: всё, что в нём не отмечено, считается «ничего интересного». Это нужно для оценки полноты (recall) автоматической разметки SpearCut.
-- Нет строки `file_done` — файл не размечен полностью.
-- CSV — единственный источник правды; пишет его только скрипт. Ручные правки — в текстовом редакторе (Блокнот, VS Code), не в табличной программе.
-- Во время работы строки дописываются в конец (надёжно при сбое); переписывается файл только при отмене (`u`) и удалении (`Del`). При выходе из mpv файл сортируется: по видео → события по времени → заметки к файлу → `file_partial` / `file_done`.
+- The markup is manual: a person watches the video and marks moments. Marks, clips and ratings are structured data and can serve as ground truth for automatic tools, for example to train and evaluate automatic triage. Notes are for people and are not used by automation.
+- The file lives **in the video folder** and moves to the archive with it. The CSV contains no paths.
+- `file` is always the name of the original video (MP4), even if an LRV/LRF proxy was watched; see the `src` column.
+- `file_done` means the file was watched to the end: anything not marked in it counts as "nothing interesting". This is needed to measure the recall of SpearCut's automatic markup.
+- No `file_done` row — the file is not fully marked up.
+- The CSV is the single source of truth, and only the script writes it. Manual edits belong in a text editor (Notepad, VS Code), not in a spreadsheet.
+- While you work, rows are appended to the end (safe on a crash); the file is rewritten only on undo (`u`) and delete (`Del`). On exit from mpv the file is sorted: by video → events by time → notes for the file → `file_partial` / `file_done`.
 
-## Колонки (разделитель `;`, UTF-8 с BOM)
+## Columns (`;` delimiter, UTF-8 with BOM)
 
 `logged_at;event;activity;file;src;time_ms;end_ms;time_hms;label;rating;note;speed_pct;duration_ms;duration_hms;camera_time`
 
-| event | смысл | заполнено |
+| event | meaning | filled in |
 |---|---|---|
-| `mark` | точечная метка | time_ms, time_hms, label, speed_pct |
-| `clip` | отрезок `i` … `o` | time_ms, end_ms, time_hms, label (последняя метка между i и o), speed_pct |
-| `note` | заметка; с time_ms — к моменту, без — ко всему файлу | note (+ time_ms, speed_pct для момента) |
-| `file_done` | файл просмотрен (Enter) | rating, duration_ms, duration_hms, camera_time |
-| `file_partial` | оценка поставлена, но ушёл с файла без Enter | rating, duration, camera_time |
+| `mark` | point mark | time_ms, time_hms, label, speed_pct |
+| `clip` | range `i` … `o` | time_ms, end_ms, time_hms, label (the last mark between i and o), speed_pct |
+| `note` | note; with time_ms — at a moment, without — for the whole file | note (+ time_ms, speed_pct for a moment) |
+| `file_done` | file reviewed (Enter) | rating, duration_ms, duration_hms, camera_time |
+| `file_partial` | rated, but left the file without Enter | rating, duration, camera_time |
 
-- Если по файлу несколько `file_done`, действует последняя (переоценка).
-- `time_hms`, `duration_hms` — `чч:мм:сс` для человека; точные значения — в `*_ms`.
-- `speed_pct` — скорость воспроизведения в момент метки, показатель точности (метка на 400 % грубее).
-- `camera_time` — время записи из метаданных. GoPro пишет местное время часов камеры; другие камеры могут писать UTC.
+- If a file has several `file_done` rows, the last one counts (re-rating).
+- `time_hms`, `duration_hms` are `hh:mm:ss` for people; the exact values are in `*_ms`.
+- `speed_pct` is the playback speed at the moment of the mark, an accuracy indicator (a mark at 400 % is coarser).
+- `camera_time` is the recording time from the metadata. GoPro writes the local time of the camera clock; other cameras may write UTC.
 
-## Метки
+## Labels
 
-Список фиксированный. Новая метка — через изменение скрипта, не правкой CSV; идеи сначала записываются заметками.
+The list is fixed. A new label is added by changing the script, not by editing the CSV; ideas are written down as notes first.
 
-Новая метка добавляется в двух местах: `LABELS` и подсказка `HELP` в `camera_triage.lua` (клавиша) и `LABELS` в `tools/triage_plan.py` (цвет маркера в Resolve; оттуда же колонки отчёта и проверка `pad.<метка>`). Тест `tests/test_labels.py` проверяет, что списки совпадают. Метки, которых нет в списке (старые или переименованные), отчёт не теряет: они получают колонки в конце таблиц.
+A new label is added in two places: `LABELS` and the `HELP` text in `camera_triage.lua` (the key), and `LABELS` in `tools/triage_plan.py` (the marker color in Resolve; the report columns and the `pad.<label>` check come from there too). The test `tests/test_labels.py` checks that the lists match. Labels missing from the list (old or renamed) are not lost by the report: they get columns at the end of the tables.
 
-| Метка | Клавиша | Когда ставить |
+| Label | Key | When to use |
 |---|---|---|
-| `highlight` | h | интересно, но без категории |
-| `scenery` | v | красиво: пейзаж под водой или над, кораллы, водоросли, рельеф |
-| `people` | p | люди, общение, смешное |
-| `bad` | b | точно выбросить: мутно, камера в кармане, темно (отрицательный пример, клипов не даёт) |
-| `fish` | f | рыба в кадре (любая, включая мурену) |
-| `shot` | s | выстрел |
-| `catch` | c | добыча |
-| `wildlife` | w | живность не-рыба: черепаха, осьминог, скат, каракатица, дельфин |
-| `dive` | d | **точкой** — интересный момент во время нырка; **внутри клипа** `i` (погружение) … `d` … `o` (всплытие) — весь нырок. Различаются по `event`: `mark` или `clip` |
-| `jump` `trick` `crash` `ride` | j t x r | кайт |
+| `highlight` | h | interesting, but no category fits |
+| `scenery` | v | beautiful: landscape under or above water, corals, seaweed, terrain |
+| `people` | p | people, interaction, funny moments |
+| `bad` | b | definitely discard: murky, camera in a pocket, too dark (a negative example, produces no clips) |
+| `fish` | f | a fish in the frame (any, including morays) |
+| `shot` | s | a shot |
+| `catch` | c | the catch |
+| `wildlife` | w | animals other than fish: turtle, octopus, ray, cuttlefish, dolphin |
+| `dive` | d | **as a point** — an interesting moment during a dive; **inside a clip** `i` (descent) … `d` … `o` (ascent) — the whole dive. Told apart by `event`: `mark` or `clip` |
+| `jump` `trick` `crash` `ride` | j t x r | kitesurfing |
 
-Активность (spearfishing / kitesurfing / other) пишется в каждую строку и меняется клавишей `a`. При открытии папки она берётся из самой поздней записи её `_triage.csv`, поэтому выбирать активность заново после перезапуска mpv не нужно.
+The activity (spearfishing / kitesurfing / other) is written to every row and changed with the `a` key. When a folder is opened, it is taken from the latest row of its `_triage.csv`, so there is no need to pick the activity again after restarting mpv.
 
-**Оценка файла**
+**File rating**
 
 | | |
 |---|---|
-| 0 | больше не смотреть / мусор |
-| 1 | что-то есть |
-| 2 | обычный нормальный файл (большинство) |
-| 3 | редкий, по-настоящему сильный |
+| 0 | never watch again / junk |
+| 1 | there is something |
+| 2 | an ordinary decent file (most of them) |
+| 3 | rare, really strong |
 
-## Поведение в mpv
+## Behavior in mpv
 
-- Статус справа вверху: файл, просмотрен или нет, оценка, число меток и заметок, «просмотрено N из M»; скорость ≠ 1x — крупно; открытый клип.
-- Метки и заметки — засечки на полосе прокрутки; `PgUp`/`PgDn` прыгают по ним; при просмотре они всплывают.
-- В конце каждого файла пауза и напоминание про оценку.
-- `Enter` переходит к следующему **непросмотренному** файлу. На уже просмотренном файле без изменений оценки повторная строка не пишется.
-- Место в файле запоминается при переходе на другой файл и при выходе.
-- `u`: открытое начало клипа отменяется сразу; запись в CSV — после повторного `u` в течение 4 с. Текст отменённой заметки подставляется в следующую `n` / `N` — так заметку переносят в другое место.
-- `Del`: удаляет ближайшую к текущему месту метку, клип (по началу или концу) или заметку к моменту в пределах ±3 с — в том числе поставленную в прошлых сессиях. Первое нажатие показывает, что будет удалено, второе в течение 4 с — удаляет строку из CSV. `u` возвращает удалённое. Удобно так: `PgUp`/`PgDn` к метке → `Del` → `Del`. Заметки к файлу (`N`) так не удаляются — только в текстовом редакторе.
-- Уход с файла без Enter: оценка сохраняется как `file_partial`, незакрытый клип отбрасывается.
-- Прокси: если рядом с MP4 лежит лёгкая копия (GoPro `.LRV`, DJI `.LRF`), её можно смотреть вместо оригинала — `prefer_proxy=yes` в настройках или клавиша `L` на ходу. В CSV всё равно пишется имя MP4, в `src` — `lrv`/`lrf`.
-- Папка: в списке все видео, убирается только мусор (фото, THM, дубли LRV). Открывается первый непросмотренный файл.
-- Главы GoPro: длинная запись делится на файлы GX010123, GX020123, … (глава, затем номер записи). mpv сортирует по имени, и продолжение записи оказывается в конце списка; скрипт ставит главы одной записи подряд (`gopro_order=yes`, по умолчанию). Остальные файлы не переставляются. Тот же порядок — в CSV после сортировки при выходе.
+- Status in the top right corner: file, reviewed or not, rating, number of marks and notes, "reviewed N of M"; speed ≠ 1x in large type; an open clip.
+- Marks and notes are ticks on the seek bar; `PgUp`/`PgDn` jump between them; during playback they pop up.
+- At the end of every file playback pauses with a reminder about the rating.
+- `Enter` moves to the next **unreviewed** file. On an already reviewed file with an unchanged rating no new row is written.
+- The position in a file is remembered when switching to another file and on exit.
+- `u`: an open clip start is cancelled right away; a CSV row after a second `u` within 4 s. The text of an undone note is prefilled into the next `n` / `N` — this is how a note is moved to another place.
+- `Del`: deletes the mark, clip (by its start or end) or note at a moment nearest to the current position within ±3 s — including ones from earlier sessions. The first press shows what will be deleted, a second press within 4 s removes the row from the CSV. `u` brings it back. Handy: `PgUp`/`PgDn` to the mark → `Del` → `Del`. Notes for the file (`N`) cannot be deleted this way — only in a text editor.
+- Leaving a file without Enter: the rating is saved as `file_partial`, an unclosed clip is discarded.
+- Proxy: if a light copy lies next to the MP4 (GoPro `.LRV`, DJI `.LRF`), it can be watched instead of the original — `prefer_proxy=yes` in the settings or the `L` key on the fly. The CSV still gets the MP4 name, and `src` gets `lrv`/`lrf`.
+- Folder: all videos are in the list, only junk is dropped (photos, THM, duplicate LRVs). The first unreviewed file is opened.
+- GoPro chapters: a long recording is split into files GX010123, GX020123, … (chapter, then recording number). mpv sorts by name, so the continuation of a recording ends up at the end of the list; the script puts the chapters of one recording in sequence (`gopro_order=yes`, the default). Other files are not moved. The CSV gets the same order after sorting on exit.
 
-## Отчёт по архиву (`tools/make_report.py`)
+## Archive report (`tools/make_report.py`)
 
-- Обход: все вложенные папки, кроме `Clips` (`--skip`). Папка попадает в отчёт, если в ней есть `_triage.csv` или видео (MP4/MOV; прокси LRV/LRF отдельными видео не считаются).
-- Статус видео: `просмотрен` — есть `file_done`; `оценка без Enter` — только `file_partial`; `начат` — есть метки или заметки, оценки нет; `не открыт` — видео есть на диске, в разметке его нет.
-- Оценка — последняя `file_done`, как у нарезки. `rating_draft` — оценка из `file_partial`, поставленная позже неё (переоценка без Enter).
-- Статус папки: `размечена` (все видео просмотрены), `частично (N из M)`, `не размечена` (нет `_triage.csv`), `CSV в другом формате` (пересохранён в табличной программе — не читается).
-- Колонки меток (`highlight` … `ride`) считают точечные метки и клипы `i`/`o` с этой меткой. `duration_*` — сумма известных длительностей, `reviewed_*` — только просмотренных; `unknown_duration` — у скольких видео длительность неизвестна (не открыты и без `--probe`, или файла нет на диске).
-- `_report_events.csv` — объединение всех `_triage.csv` без изменений: колонка `folder` слева, `file_rating`, `file_status` и `copy_of` справа.
-- Копии: одно и то же видео в нескольких папках (копия в проект, экспорт, бэкап, копия одного `_triage.csv`) узнаётся по имени файла плюс одному из признаков: размер (видео на диске), время первой записи разметки о файле (копия `_triage.csv`, в том числе файла, который только начат), время съёмки и длительность из разметки (если времени нет — точная длительность). Одного имени мало: GoPro после форматирования карты снова пишет `GX010001`.
-  - Основная копия — там, где видео лежит на диске и видео в папке больше всего (исходная папка футажа); при равенстве — первая по пути.
-  - У остальных `copy_of` = папка основной, с пометкой «разметка отличается», если в копии дометили или переоценили.
-  - У основной `copies` — сколько ещё копий. У папки `copies` — сколько в ней копий; если все видео — копии, статус «копия: <папка>».
-  - Строки папок показывают их как есть. ИТОГО считается по уникальным видео: копии один раз, по разметке основной копии.
-- `_triage.csv` отчёт не меняет. Файлы отчёта перезаписываются при каждом запуске; если один из них открыт в Excel, он пропускается с предупреждением.
+- Walk: all subfolders except `Clips` (`--skip`). A folder goes into the report if it has a `_triage.csv` or videos (MP4/MOV; LRV/LRF proxies do not count as separate videos).
+- Video status: `reviewed` — has `file_done`; `rated, no Enter` — only `file_partial`; `started` — has marks or notes but no rating; `not opened` — the video is on disk but not in the markup.
+- The rating is the last `file_done`, as for cutting. `rating_draft` is a rating from a `file_partial` made after it (re-rating without Enter).
+- Folder status: `complete` (all videos reviewed), `partial (N of M)`, `not marked up` (no `_triage.csv`), `CSV in another format` (re-saved in a spreadsheet — cannot be read).
+- Label columns (`highlight` … `ride`) count point marks and `i`/`o` clips with that label. `duration_*` is the sum of known durations, `reviewed_*` of reviewed videos only; `unknown_duration` is how many videos have an unknown duration (not opened and no `--probe`, or no file on disk).
+- `_report_events.csv` is all `_triage.csv` files combined without changes: a `folder` column on the left, `file_rating`, `file_status` and `copy_of` on the right.
+- Copies: the same video in several folders (a copy in a project, an export, a backup, a copy of one `_triage.csv`) is recognized by its file name plus one of these signs: size (video on disk), time of the first markup row for the file (a copy of `_triage.csv`, including a file that was only started), shooting time and duration from the markup (if there is no time — the exact duration). The name alone is not enough: after formatting the card a GoPro writes `GX010001` again.
+  - The primary copy is where the video is on disk and the folder has the most videos (the original footage folder); on a tie — the first by path.
+  - The others get `copy_of` = the primary's folder, marked "(markup differs)" if the copy was marked further or re-rated.
+  - The primary's `copies` is how many other copies there are. A folder's `copies` is how many copies it holds; if all its videos are copies, the status is "copy: <folder>".
+  - Folder rows show them as they are. TOTAL counts unique videos: each copy once, by the markup of the primary copy.
+- The report does not change `_triage.csv`. Report files are overwritten on every run; if one of them is open in Excel, it is skipped with a warning.
 
-## Таймлайн для монтажа (`tools/make_timeline.py`)
+## Editing timeline (`tools/make_timeline.py`)
 
-- План отрезков тот же, что у нарезки ниже (общий модуль `tools/triage_plan.py`): отступы, склейка, `exclude`, `point_exclude`, `--labels`, `--min-rating`, `--no-marks`, `make_clips.conf`. Отличие — вместо файлов-клипов пишется таймлайн FCPXML 1.8, который ссылается на оригинальные видео.
-- `_selects.fcpxml` рядом с `_triage.csv`: таймлайн «Selects <папка>», отрезки подряд в порядке записи (главы GoPro подряд). Имя отрезка — `GX010123 00:01:20 fish+shot ★2`.
-- Маркеры: точечные метки (название маркера = метка, включая `bad`), клипы `i`/`o` (маркер с длительностью, «клип dive»), заметки к моменту («✎ текст»).
-- Resolve (проверено на 21.1.2) маркеры из FCPXML не берёт, а из `.edl` — берёт, с цветами. Поэтому рядом пишется `.edl` с тем же именем — маркеры таймлайна в формате Resolve. Импорт вторым шагом: правый клик по таймлайну в Media Pool → Timelines → Import → Timeline Markers from EDL. Таймкоды в нём рассчитаны на начало таймлайна 01:00:00:00, как в `.fcpxml`.
-- Цвета маркеров: fish — синий, shot — красный, catch — зелёный, wildlife — голубой (Cyan), dive — Sky, scenery — Mint, people — розовый, highlight — жёлтый, bad — Cocoa, jump — фиолетовый, trick — Fuchsia, crash — Rose, ride — Lavender; заметки к моменту — Cream, к файлу — Sand.
-- `--full` — ещё `_full.fcpxml` и `_full.edl`: каждый размеченный файл целиком, вся разметка маркерами, заметки к файлу — маркером в начале. Фильтр `--labels` на него не действует, оценка — действует.
-- Время точное по кадрам: частота, длительность и таймкод исходника берутся через ffprobe (GoPro пишет таймкод времени суток, и Resolve ищет кадры по нему). Частота таймлайна — самая частая среди исходников, начало — 01:00:00:00.
-- Нет MP4 — на таймлайн идёт прокси LRV/LRF (с предупреждением). Пути к видео в файле абсолютные; после переноса папки — Relink Media в Resolve.
-- Файлы таймлайна перезаписываются при каждом запуске; правки в Resolve живут в проекте Resolve, а не в `.fcpxml`.
+- The segment plan is the same as for cutting below (the shared module `tools/triage_plan.py`): pads, merging, `exclude`, `point_exclude`, `--labels`, `--min-rating`, `--no-marks`, `make_clips.conf`. The difference: instead of clip files an FCPXML 1.8 timeline is written that links to the original videos.
+- `_selects.fcpxml` next to `_triage.csv`: timeline "Selects <folder>", segments back to back in recording order (GoPro chapters in sequence). A segment is named `GX010123 00:01:20 fish+shot ★2`.
+- Markers: point marks (marker name = label, including `bad`), `i`/`o` clips (a marker with a duration, "clip dive"), notes at moments ("✎ text").
+- Resolve (tested on 21.1.2) ignores markers in FCPXML but reads them, with colors, from an `.edl`. So an `.edl` with the same name is written next to it — the timeline markers in Resolve's format. Import them as a second step: right-click the timeline in the Media Pool → Timelines → Import → Timeline Markers from EDL. Its timecodes assume the timeline starts at 01:00:00:00, as in the `.fcpxml`.
+- Marker colors: fish — blue, shot — red, catch — green, wildlife — Cyan, dive — Sky, scenery — Mint, people — pink, highlight — yellow, bad — Cocoa, jump — purple, trick — Fuchsia, crash — Rose, ride — Lavender; notes at moments — Cream, for the file — Sand.
+- `--full` also writes `_full.fcpxml` and `_full.edl`: every marked file in full, all markup as markers, notes for the file as a marker at the start. The `--labels` filter does not apply to it, the rating does.
+- Times are frame-accurate: the frame rate, duration and timecode of each source come from ffprobe (GoPro writes a time-of-day timecode, and Resolve finds frames by it). The timeline frame rate is the most common one among the sources, the start is 01:00:00:00.
+- No MP4 — the LRV/LRF proxy goes on the timeline (with a warning). Video paths in the file are absolute; after moving the folder use Relink Media in Resolve.
+- Timeline files are overwritten on every run; edits made in Resolve live in the Resolve project, not in the `.fcpxml`.
 
-## Нарезка (`tools/make_clips.py`)
+## Cutting (`tools/make_clips.py`)
 
-- Точечная метка → отрезок −5 / +5 с (по умолчанию); клип `i`/`o` → его границы ± 0.5 с; метки клипа — все точечные метки внутри него.
-- Настройки — `tools/make_clips.conf` (или `--config ПУТЬ`): отступы глобально (`pad_before`, `pad_after`) и по меткам (`pad.shot = 6/3`, `pad.scenery = 4`; метки без своей строки берут глобальные), `clip_pad`, `merge_gap`, `exclude`, `point_exclude`, `min_rating`, `out`, `reencode_crf`, `reencode_preset`. Приоритет: встроенные значения → конфиг → командная строка; `--pad-before` / `--pad-after` перекрывают и отступы по меткам. Итоговые настройки печатаются при запуске.
-- `out` / `--out`: имя подпапки рядом с видео (`Clips`) или полный путь (`D:\02_Project\Clips`). С полным путём видео и `_triage.csv` остаются в папке футажа, и их не нужно копировать в проект. Если папок футажа с разметкой несколько, клипы раскладываются по подпапкам с их путями от указанной папки (`D:\02_Project\Clips\Turkey\…`), иначе одинаковые имена файлов с разных карт смешались бы. Индекс `_clips.csv` лежит рядом с клипами.
-- `bad` клипов не даёт и в имя не попадает (`--exclude`); клип `i` … `b` … `o` без других меток не нарезается. Если точки какой-то метки не нужны как клипы — `--point-exclude dive`.
-- Близкие отрезки (≤ 2 с) склеиваются: `GX011151_00-01-20_14s_fish+shot.mp4` в `Clips/`, индекс `Clips/_clips.csv`.
-- Индекс: `clip;source;src;start_ms;end_ms;duration_ms;labels;rating;activity;marks;notes`; `src` — из чего резали (`mp4`/`lrv`/`lrf`), `marks`/`notes` — метки и заметки внутри клипа (`fish@35000 | bad@45000`, время в мс от начала исходника).
-- По умолчанию без перекодирования (`-c copy`): быстро и без потерь; начать можно только с ключевого кадра, поэтому старт сдвигается к предыдущему (обычно ≤ ~1 с), в индекс пишется фактическое начало. Для нарезки по разметке этого хватает.
-- `--reencode` — экспорт для совместимости: H.264 8 бит + AAC, играет везде (телефон, мессенджеры, плееры без HEVC / 10 бит), старт ровно по кадру. На 4K очень медленно — кодирует процессор.
-- Файлы с оценкой 0 по умолчанию пропускаются; `--min-rating 0` — брать всё.
-- Фильтры: `--min-rating N`, `--labels fish,shot` (выбирает клипы, имя и границы не меняет), `--pad-before`, `--pad-after`.
-- В имени клипа начало, длительность и метки, поэтому смена `pad_before` или `pad_after` даёт новое имя, и клип режется заново.
-- Повторный запуск не трогает готовые клипы; клип, вырезанный из прокси, перерезается, когда появился MP4. `--prune` удаляет из `Clips/` клипы из индекса, которых нет в текущем плане (после смены разметки, отступов или оценки 0). Фильтры `--labels`, `--no-marks`, `--min-rating` выбирают только, что резать сейчас: с `--prune` клипы с другими метками и из файлов с меньшей оценкой не удаляются.
-- Если `_clips.csv` открыт в другой программе (Excel блокирует файл), скрипт предупреждает до нарезки; клипы режутся, а индекс пишется в `_clips.pending.csv` и переносится в `_clips.csv` при следующем запуске. Потерянный индекс восстанавливается повторным запуском.
+- A point mark → a segment −5 / +5 s (by default); an `i`/`o` clip → its bounds ± 0.5 s; the clip's labels are all point marks inside it.
+- Settings: `tools/make_clips.conf` (or `--config PATH`): global pads (`pad_before`, `pad_after`) and per-label pads (`pad.shot = 6/3`, `pad.scenery = 4`; labels without their own line use the global ones), `clip_pad`, `merge_gap`, `exclude`, `point_exclude`, `min_rating`, `out`, `reencode_crf`, `reencode_preset`. Priority: built-in values → config → command line; `--pad-before` / `--pad-after` also override per-label pads. The resulting settings are printed on startup.
+- `out` / `--out`: a subfolder name next to the videos (`Clips`) or a full path (`D:\02_Project\Clips`). With a full path the videos and `_triage.csv` stay in the footage folder and need not be copied to the project. With several marked footage folders the clips go to subfolders by their paths from the given folder (`D:\02_Project\Clips\Turkey\…`), otherwise identical file names from different cards would mix. The `_clips.csv` index lies next to the clips.
+- `bad` produces no clips and does not appear in names (`--exclude`); a clip `i` … `b` … `o` with no other labels is not cut. If the points of some label are not wanted as clips — `--point-exclude dive`.
+- Close segments (≤ 2 s) are merged: `GX011151_00-01-20_14s_fish+shot.mp4` in `Clips/`, index `Clips/_clips.csv`.
+- Index: `clip;source;src;start_ms;end_ms;duration_ms;labels;rating;activity;marks;notes`; `src` is what was cut from (`mp4`/`lrv`/`lrf`), `marks`/`notes` are the marks and notes inside the clip (`fish@35000 | bad@45000`, time in ms from the start of the source).
+- No re-encoding by default (`-c copy`): fast and lossless; a clip can only start on a keyframe, so the start moves back to the previous one (usually ≤ ~1 s), and the index records the actual start. That is enough for cutting by markup.
+- `--reencode` is an export for compatibility: H.264 8-bit + AAC, plays everywhere (phones, messengers, players without HEVC / 10-bit), starts exactly on a frame. Very slow on 4K — the CPU encodes.
+- Files rated 0 are skipped by default; `--min-rating 0` takes everything.
+- Filters: `--min-rating N`, `--labels fish,shot` (selects clips, does not change their names or bounds), `--pad-before`, `--pad-after`.
+- The clip name contains the start, duration and labels, so changing `pad_before` or `pad_after` gives a new name and the clip is cut again.
+- A repeated run leaves finished clips alone; a clip cut from a proxy is re-cut once the MP4 appears. `--prune` deletes clips listed in the index that are not in the current plan (after changes to the markup, the pads or a rating of 0). The filters `--labels`, `--no-marks`, `--min-rating` only choose what to cut now: with `--prune` clips with other labels and from lower-rated files are not deleted.
+- If `_clips.csv` is open in another program (Excel locks the file), the script warns before cutting; the clips are cut, and the index is written to `_clips.pending.csv` and moved to `_clips.csv` on the next run. A lost index is restored by running again.

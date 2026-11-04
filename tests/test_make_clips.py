@@ -1,11 +1,11 @@
-"""make_clips.py без ffmpeg: имена клипов, папка вывода, --prune (исходников нет — ничего не режется)."""
+"""make_clips.py without ffmpeg: clip names, output folder, --prune (no sources — nothing is cut)."""
 import tempfile
 import unittest
 from pathlib import Path
 
 from support import empty_config, quiet, row, tool_args, triage_csv
 
-import make_clips as mc                     # noqa: E402  (support добавляет tools/ в sys.path)
+import make_clips as mc                     # noqa: E402  (support adds tools/ to sys.path)
 
 
 class ClipNameTest(unittest.TestCase):
@@ -38,13 +38,13 @@ class OutDirTest(unittest.TestCase):
         self.assertEqual(mc.clips_dir(a, args, many=False), out)
         self.assertEqual(mc.clips_dir(a, args, many=True), out / "Turkey")
         self.assertEqual(mc.clips_dir(b, args, many=True), out / "Kite" / "day1")
-        # указана сама папка футажа с разметкой — подпапка по её имени
+        # the marked footage folder itself is given — a subfolder by its name
         args = tool_args(mc, self.root / "Footage" / "Turkey", "--config", self.conf, "--out", out)
         self.assertEqual(mc.clips_dir(a, args, many=True), out / "Turkey")
 
 
 class PruneTest(unittest.TestCase):
-    """Регрессия: --prune вместе с фильтрами удалял клипы, отсечённые фильтром."""
+    """Regression: --prune together with filters deleted clips excluded by the filter."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -52,7 +52,7 @@ class PruneTest(unittest.TestCase):
         self.conf = empty_config(self.tmp.name)
         self.out = self.folder / "Clips"
         self.write_markup(shot=True)
-        # клипы прошлого запуска и их индекс; исходного MP4 нет — резать нечего
+        # clips of the previous run and their index; there is no source MP4 — nothing to cut
         self.fish = "GX010001_00-00-05_10s_fish.mp4"
         self.shot = "GX010001_00-00-35_10s_shot.mp4"
         self.low = "GX010002_00-00-15_10s_catch.mp4"
@@ -107,9 +107,9 @@ class PruneTest(unittest.TestCase):
     def test_missing_source_is_reported_and_clips_kept(self):
         st, out = self.run_clips()
         self.assertEqual(st["nosrc"], 3)
-        self.assertIn("нет в папке", out)
+        self.assertIn("are not in the folder", out)
         self.assertEqual(self.existing(), {self.fish, self.shot, self.low})
-        self.assertEqual(len(mc.read_index(self.out)), 3)   # индекс прошлого запуска сохранён
+        self.assertEqual(len(mc.read_index(self.out)), 3)   # the index of the previous run is kept
 
 
 if __name__ == "__main__":

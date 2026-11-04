@@ -1,33 +1,33 @@
 #!/usr/bin/env python3
 """
-make_timeline.py — разметка _triage.csv → таймлайн для монтажа (FCPXML, DaVinci Resolve и др.).
+make_timeline.py — _triage.csv markup → an editing timeline (FCPXML, DaVinci Resolve and others).
 
-Вместо физической нарезки: тот же план отрезков, что у make_clips.py (те же отступы, склейка,
-исключения, --labels, --min-rating, make_clips.conf), но на выходе — файл таймлайна, который
-ссылается на ОРИГИНАЛЬНЫЕ видео. В монтажке любой отрезок растягивается до краёв исходника,
-отступы задают только начальную ширину. Ничего не копируется и не перекодируется.
+Instead of physical cutting: the same segment plan as make_clips.py (same pads, merging,
+exclusions, --labels, --min-rating, make_clips.conf), but the output is a timeline file that
+links to the ORIGINAL videos. In the editor any segment can be extended to the edges of its
+source; the pads only set the initial width. Nothing is copied or re-encoded.
 
-Для каждой папки футажа рядом с _triage.csv:
-  _selects.fcpxml  таймлайн «Selects <папка>»: отрезки подряд (порядок записи, главы GoPro
-                   подряд), на каждом маркеры — метки (название = метка), клипы i/o (маркер
-                   с длительностью), заметки к моменту (текст в примечании маркера).
-  _full.fcpxml     (--full) таймлайн «Full <папка>»: каждый размеченный файл целиком,
-                   вся разметка маркерами, включая bad и заметки к файлу. Обзор всего материала.
+For each footage folder, next to _triage.csv:
+  _selects.fcpxml  timeline "Selects <folder>": segments back to back (recording order, GoPro
+                   chapters in sequence); each carries markers — labels (name = label), i/o
+                   clips (a marker with a duration), notes at moments (text in the marker note).
+  _full.fcpxml     (--full) timeline "Full <folder>": every marked file in full, all markup
+                   as markers, including bad and notes for the file. An overview of all material.
 
-Рядом с каждым .fcpxml — .edl с тем же именем: маркеры таймлайна с цветом по метке
-(fish синий, shot красный, catch зелёный, …). Resolve не берёт маркеры из FCPXML, поэтому
-маркеры импортируются вторым шагом.
+Next to each .fcpxml there is an .edl with the same name: timeline markers colored by label
+(fish blue, shot red, catch green, …). Resolve ignores markers in FCPXML, so markers are
+imported as a second step.
 
 Resolve:
-  1. File → Import → Timeline… → выбрать .fcpxml. Видео попадут в Media Pool целиком.
-  2. Правый клик по этому таймлайну в Media Pool → Timelines → Import →
-     Timeline Markers from EDL… → выбрать .edl с тем же именем.
-Если папку футажа потом переместить — Relink Media в Resolve.
+  1. File → Import → Timeline… → choose the .fcpxml. The videos go to the Media Pool in full.
+  2. Right-click this timeline in the Media Pool → Timelines → Import →
+     Timeline Markers from EDL… → choose the .edl with the same name.
+If the footage folder is moved later — Relink Media in Resolve.
 
-Нужен ffprobe (частота кадров, длительность, таймкод исходника): winget install Gyan.FFmpeg
-Частота таймлайна — самая частая среди исходников, начало — 01:00:00:00.
+Requires ffprobe (frame rate, duration, source timecode): winget install Gyan.FFmpeg
+The timeline frame rate is the most common one among the sources, the start is 01:00:00:00.
 
-Примеры:
+Examples:
   py make_timeline.py "D:\\Footage\\2026-09_Turkey"
   py make_timeline.py "D:\\Footage\\2026-09_Turkey" --min-rating 2 --pad-before 8 --full
   py make_timeline.py "D:\\Footage" --labels fish,shot,catch --dry-run
@@ -44,32 +44,32 @@ from fractions import Fraction
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import triage_plan as tp                    # noqa: E402  общий план отрезков (как у make_clips.py)
+import triage_plan as tp                    # noqa: E402  shared segment plan (as in make_clips.py)
 
 SELECTS_NAME = "_selects.fcpxml"
 FULL_NAME = "_full.fcpxml"
-FCPXML_VERSION = "1.8"      # понимают Resolve 16+ и Final Cut Pro 10.4+
+FCPXML_VERSION = "1.8"      # understood by Resolve 16+ and Final Cut Pro 10.4+
 
 
 def parse_args():
-    ap = argparse.ArgumentParser(description="Разметка _triage.csv → таймлайн FCPXML для монтажа")
+    ap = argparse.ArgumentParser(description="_triage.csv markup → FCPXML timeline for editing")
     tp.add_plan_args(ap)
     ap.add_argument("--full", action="store_true",
-                    help=f"ещё {FULL_NAME}: все размеченные файлы целиком со всей разметкой")
-    ap.add_argument("--dry-run", action="store_true", help="только показать, что будет на таймлайне")
+                    help=f"also {FULL_NAME}: every marked file in full with all its markup")
+    ap.add_argument("--dry-run", action="store_true", help="only show what would go on the timeline")
     return tp.finish_args(ap, ap.parse_args())
 
 
-# ---------------------------------------------------------------- время
+# ---------------------------------------------------------------- time
 
 def rt(x):
-    """Время FCPXML: рациональное число секунд — «1001/60000s», «10s»."""
+    """FCPXML time: a rational number of seconds — "1001/60000s", "10s"."""
     x = Fraction(x)
     return f"{x.numerator}s" if x.denominator == 1 else f"{x.numerator}/{x.denominator}s"
 
 
 def tc_frames(tc, fps):
-    """Таймкод «чч:мм:сс:кк» (или «;» — drop frame) → номер кадра от нуля."""
+    """Timecode "hh:mm:ss:ff" (or ";" — drop frame) → frame number from zero."""
     m = re.match(r"^(\d+):(\d+):(\d+)([:;.,])(\d+)$", (tc or "").strip())
     if not m:
         return 0
@@ -84,7 +84,7 @@ def tc_frames(tc, fps):
 
 
 def probe(src):
-    """Параметры исходника через ffprobe: fps, размер кадра, длительность, таймкод, звук."""
+    """Source parameters via ffprobe: fps, frame size, duration, timecode, audio."""
     cmd = ["ffprobe", "-v", "error",
            "-show_entries", "stream=codec_type,r_frame_rate,avg_frame_rate,width,height,channels,"
            "sample_rate:stream_tags=timecode:format=duration:format_tags=timecode",
@@ -128,13 +128,13 @@ def probe(src):
 # ---------------------------------------------------------------- FCPXML
 
 class Doc:
-    """Ресурсы (форматы и исходники) одного файла FCPXML."""
+    """Resources (formats and sources) of one FCPXML file."""
 
     def __init__(self):
         self.root = ET.Element("fcpxml", version=FCPXML_VERSION)
         self.resources = ET.SubElement(self.root, "resources")
         self.formats = {}       # (fps, w, h) → id
-        self.assets = {}        # путь → id
+        self.assets = {}        # path → id
         self.n = 0
 
     def _id(self):
@@ -170,7 +170,7 @@ class Doc:
             library = ET.SubElement(self.root, "library")
         event = ET.SubElement(library, "event", name=event_name)
         project = ET.SubElement(event, "project", name=project_name)
-        tc_start = Fraction(3600 * round(fps)) / fps            # 01:00:00:00, как в Resolve
+        tc_start = Fraction(3600 * round(fps)) / fps            # 01:00:00:00, as in Resolve
         seq = ET.SubElement(project, "sequence", format=self.format_id(fps, w, h),
                             tcStart=rt(tc_start), tcFormat="NDF", audioLayout="stereo", audioRate="48k")
         return seq, ET.SubElement(seq, "spine"), tc_start
@@ -183,8 +183,8 @@ class Doc:
 
 
 def add_clip(spine, doc, item, s, e, offset, seq_fps, name, markers):
-    """Отрезок s…e (секунды от начала файла) исходника → asset-clip на таймлайне с offset.
-    markers: [(t, длительность|None, название, примечание)]. Возвращает длительность на таймлайне."""
+    """Source segment s…e (seconds from the file start) → asset-clip on the timeline at offset.
+    markers: [(t, duration|None, name, note, color)]. Returns (timeline length, markers for the EDL)."""
     info, src = item["info"], item["src"]
     fps, tc0 = info["fps"], info["tc0"]
     last = round(info["duration"] * fps) if info["duration"] else None
@@ -193,14 +193,14 @@ def add_clip(spine, doc, item, s, e, offset, seq_fps, name, markers):
     if ef <= sf:
         return Fraction(0), []
     start = Fraction(tc0 + sf) / fps
-    # целые кадры таймлайна, вниз — не выйти за конец исходника при другой частоте кадров
+    # whole timeline frames, rounded down — never past the source end at a different frame rate
     length = Fraction(max(1, int(Fraction(ef - sf) / fps * seq_fps))) / seq_fps
     clip = ET.SubElement(spine, "asset-clip", ref=doc.asset_id(src, info), name=name,
                          offset=rt(offset), start=rt(start), duration=rt(length),
                          format=doc.format_id(fps, info["width"], info["height"]),
                          tcFormat=info["tc_format"])
     one = Fraction(1) / fps
-    timeline = []           # для EDL: (кадр таймлайна, длительность в кадрах, цвет, название)
+    timeline = []           # for the EDL: (timeline frame, duration in frames, color, name)
     for t, dur, title, note, color in sorted(markers, key=lambda m: m[0]):
         mf = min(max(round(t * fps), sf), ef - 1)
         mstart = Fraction(tc0 + mf) / fps
@@ -214,7 +214,7 @@ def add_clip(spine, doc, item, s, e, offset, seq_fps, name, markers):
         at = offset + (mstart - start)
         if not note:
             label = title
-        elif title.endswith(short(note)):            # «✎ начало заметки…» → «✎ вся заметка»
+        elif title.endswith(short(note)):            # "✎ start of the note…" → "✎ the whole note"
             label = title[:len(title) - len(short(note))] + note
         else:
             label = f"{title} — {note}"
@@ -226,14 +226,14 @@ def short(text, n=40):
     return text if len(text) <= n else text[:n - 1].rstrip() + "…"
 
 
-# Цвета маркеров Resolve по меткам (в EDL; FCPXML цвет не передаёт) — общий список в triage_plan
+# Resolve marker colors by label (in the EDL; FCPXML carries no color) — shared list in triage_plan
 LABEL_COLORS = tp.LABELS
 NOTE_COLOR, FILE_NOTE_COLOR, OTHER_COLOR = "Cream", "Sand", "Lemon"
 
 
 def segment_markers(d, s, e, with_file_notes=False):
-    """Разметка внутри s…e → маркеры (t, длительность, название, примечание, цвет):
-    все метки, включая bad; клипы i/o; заметки."""
+    """Markup inside s…e → markers (t, duration, name, note, color):
+    all labels including bad; i/o clips; notes."""
     out = []
     for t, lab in d["marks"]:
         if s <= t <= e:
@@ -241,19 +241,19 @@ def segment_markers(d, s, e, with_file_notes=False):
     for cs, ce, lab in d["clips"]:
         if cs < e and ce > s:
             a, b = max(cs, s), min(ce, e)
-            out.append((a, b - a, f"клип {lab}" if lab else "клип",
+            out.append((a, b - a, f"clip {lab}" if lab else "clip",
                         f"i/o {tp.hms(cs)}–{tp.hms(ce)}", LABEL_COLORS.get(lab, OTHER_COLOR)))
     for t, text in d["notes"]:
         if s <= t <= e:
             out.append((t, None, "✎ " + short(text), text, NOTE_COLOR))
     if with_file_notes:
         for text in d["file_notes"]:
-            out.append((s, None, "✎ файл: " + short(text), text, FILE_NOTE_COLOR))
+            out.append((s, None, "✎ file: " + short(text), text, FILE_NOTE_COLOR))
     return out
 
 
 def tc(frame, fps):
-    """Кадр таймлайна → таймкод non-drop «чч:мм:сс:кк» (счёт по номинальной частоте, как в Resolve)."""
+    """Timeline frame → non-drop timecode "hh:mm:ss:ff" (counted at the nominal rate, as in Resolve)."""
     nominal = round(fps)
     f = frame % nominal
     s = frame // nominal
@@ -261,8 +261,8 @@ def tc(frame, fps):
 
 
 def write_marker_edl(path, title, fps, markers):
-    """EDL маркеров таймлайна в формате Resolve (Timelines → Export → Timeline Markers to EDL):
-    импорт — правый клик по таймлайну в Media Pool → Timelines → Import → Timeline Markers from EDL."""
+    """Timeline marker EDL in Resolve's format (Timelines → Export → Timeline Markers to EDL):
+    import — right-click the timeline in the Media Pool → Timelines → Import → Timeline Markers from EDL."""
     lines = [f"TITLE: {title}", "FCM: NON-DROP FRAME", ""]
     for n, (frame, dur, color, name) in enumerate(sorted(markers), 1):
         a, b = tc(frame, fps), tc(frame + 1, fps)
@@ -277,8 +277,8 @@ def stars(rating):
 
 
 def build_timeline(items, title, folder, out_path, full):
-    """items: [{fname, d, src, info, segs}] → FCPXML с одним таймлайном
-    и рядом EDL его маркеров (то же имя, .edl)."""
+    """items: [{fname, d, src, info, segs}] → FCPXML with one timeline
+    and next to it an EDL of its markers (same name, .edl)."""
     used = [it for it in items if it["info"]]
     if not used:
         return 0, 0, 0
@@ -308,14 +308,14 @@ def build_timeline(items, title, folder, out_path, full):
     return n, float(offset - tc_start), len(markers)
 
 
-# ---------------------------------------------------------------- папка
+# ---------------------------------------------------------------- folder
 
 def process_folder(csv_path, args):
-    folder = csv_path.parent.resolve()          # имя папки — в названии таймлайна
+    folder = csv_path.parent.resolve()          # the folder name goes into the timeline name
     print(f"\n== {folder}")
     rows = tp.read_rows(csv_path)
     if not tp.triage_csv_ok(rows, csv_path):
-        print(f"  ⚠ {tp.CSV_NAME} в неожиданном формате (пересохранён в другой программе?), пропуск")
+        print(f"  ⚠ {tp.CSV_NAME} has an unexpected format (re-saved in another program?), skipped")
         return False
     selects, full, missing, probes = [], [], [], {}
 
@@ -323,7 +323,7 @@ def process_folder(csv_path, args):
         if src not in probes:
             probes[src] = probe(src)
             if probes[src] is None:
-                print(f"  ⚠ {src.name}: ffprobe не смог прочитать файл, пропуск")
+                print(f"  ⚠ {src.name}: ffprobe could not read the file, skipped")
         return probes[src]
 
     for fname, d in tp.sorted_files(tp.collect(rows)):
@@ -338,7 +338,7 @@ def process_folder(csv_path, args):
             missing.append(fname)
             continue
         if is_proxy:
-            print(f"  ⚠ {fname}: MP4 нет, на таймлайн идёт {src.name} (низкое разрешение)")
+            print(f"  ⚠ {fname}: no MP4, {src.name} goes on the timeline (low resolution)")
         for s, e, labs in segs:
             print(f"  {Path(fname).stem}  {tp.hms(s)}–{tp.hms(e)}  {'+'.join(sorted(labs))}"
                   f"{stars(d['rating'])}")
@@ -352,8 +352,8 @@ def process_folder(csv_path, args):
             full.append({"fname": fname, "d": d, "src": src, "info": info, "segs": [(0.0, whole, set())]})
     if missing:
         shown = ", ".join(Path(m).stem for m in missing[:3])
-        more = f" и ещё {len(missing) - 3}" if len(missing) > 3 else ""
-        print(f"  ⚠ {len(missing)} файл(ов) из разметки нет в папке (ни MP4, ни прокси), пропуск: "
+        more = f" and {len(missing) - 3} more" if len(missing) > 3 else ""
+        print(f"  ⚠ {len(missing)} file(s) from the markup are not in the folder (neither MP4 nor proxy), skipped: "
               f"{shown}{more}")
     if args.dry_run:
         return True
@@ -365,13 +365,13 @@ def process_folder(csv_path, args):
         try:
             n, total, nm = build_timeline(items, title, folder, path, is_full)
         except OSError as e:
-            print(f"  ✗ {name} не записан: {e}")
+            print(f"  ✗ {name} not written: {e}")
             continue
         if n:
-            print(f"  → {path.name}: {n} отрезк(ов), {tp.hms(total)};  "
-                  f"{path.with_suffix('.edl').name}: {nm} маркер(ов)")
+            print(f"  → {path.name}: {n} segment(s), {tp.hms(total)};  "
+                  f"{path.with_suffix('.edl').name}: {nm} marker(s)")
     if not selects and not full:
-        print("  (нечего класть на таймлайн)")
+        print("  (nothing to put on the timeline)")
     return True
 
 
@@ -380,17 +380,17 @@ def main():
     args = parse_args()
     print(tp.describe_settings(args))
     if not args.dry_run and shutil.which("ffprobe") is None:
-        sys.exit("ffprobe не найден в PATH. Установи: winget install Gyan.FFmpeg  (и открой новое окно терминала)")
+        sys.exit("ffprobe not found in PATH. Install it: winget install Gyan.FFmpeg  (and open a new terminal window)")
     csvs = tp.find_csvs(args.folders, skip_dir=Path(args.out).name)
     if not csvs:
-        sys.exit(f"Не найдено ни одного {tp.CSV_NAME}")
+        sys.exit(f"No {tp.CSV_NAME} found")
     for c in csvs:
         process_folder(c, args)
     if not args.dry_run:
         print("\nResolve:\n"
-              "  1. File → Import → Timeline… → выбрать .fcpxml\n"
-              "  2. маркеры: правый клик по этому таймлайну в Media Pool → Timelines → Import →\n"
-              "     Timeline Markers from EDL… → выбрать .edl с тем же именем")
+              "  1. File → Import → Timeline… → choose the .fcpxml\n"
+              "  2. markers: right-click this timeline in the Media Pool → Timelines → Import →\n"
+              "     Timeline Markers from EDL… → choose the .edl with the same name")
 
 
 if __name__ == "__main__":

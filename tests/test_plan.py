@@ -1,4 +1,4 @@
-"""triage_plan.py — общий план отрезков (его используют make_clips и make_timeline)."""
+"""triage_plan.py — the shared segment plan (used by make_clips and make_timeline)."""
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,12 +28,12 @@ class PlanTest(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
         return path
 
-    # ---------------------------------------------------------------- отрезки
+    # ---------------------------------------------------------------- segments
 
     def test_point_marks_default_pads_and_merge(self):
         rows = [row("mark", "A.MP4", 10, label="fish"), row("mark", "A.MP4", 21, label="shot"),
                 row("mark", "A.MP4", 40, label="catch")]
-        # 10±5 и 21±5: зазор 1 с ≤ merge_gap 2 → склеены; 40±5 — отдельно
+        # 10±5 and 21±5: gap 1 s ≤ merge_gap 2 → merged; 40±5 — separate
         self.assertEqual(plan(rows, config=self.conf)["A.MP4"],
                          [(5, 26, ["fish", "shot"]), (35, 45, ["catch"])])
 
@@ -47,7 +47,7 @@ class PlanTest(unittest.TestCase):
                 row("mark", "A.MP4", 200, label="fish")]
         self.assertEqual(plan(rows, config=conf)["A.MP4"],
                          [(14, 23, ["shot"]), (96, 104, ["scenery"]), (193, 206, ["fish"])])
-        # --pad-before в командной строке перекрывает и отступы по меткам; pad_after — из конфига
+        # --pad-before on the command line also overrides per-label pads; pad_after comes from the config
         self.assertEqual(plan(rows, "--pad-before", "1", config=conf)["A.MP4"],
                          [(19, 23, ["shot"]), (99, 104, ["scenery"]), (199, 206, ["fish"])])
 
@@ -80,7 +80,7 @@ class PlanTest(unittest.TestCase):
                 row("mark", "A.MP4", 40, label="catch")]
         full = plan(rows, config=self.conf)["A.MP4"]
         only = plan(rows, "--labels", "shot", config=self.conf)["A.MP4"]
-        self.assertEqual(only, [full[0]])                   # тот же отрезок, не урезан до shot
+        self.assertEqual(only, [full[0]])                   # the same segment, not trimmed to shot
 
     def test_clamped_to_file_start_and_duration_short_dropped(self):
         rows = [row("mark", "A.MP4", 2, label="fish"), row("mark", "A.MP4", 59.8, label="shot"),
@@ -90,16 +90,16 @@ class PlanTest(unittest.TestCase):
         rows = [row("clip", "A.MP4", 59.9, 59.95, label="dive"), row("file_done", "A.MP4", rating="2", dur=60)]
         self.assertEqual(plan(rows, "--clip-pad", "0", config=self.conf)["A.MP4"], [])
 
-    # ---------------------------------------------------------------- разметка
+    # ---------------------------------------------------------------- markup
 
     def test_collect_last_file_done_wins_and_file_notes(self):
-        rows = [row("file_done", "A.MP4", rating="1", dur=30), row("note", "A.MP4", note="мутно"),
-                row("note", "A.MP4", 12, note="мурена"), row("file_done", "A.MP4", rating="3", dur=30),
+        rows = [row("file_done", "A.MP4", rating="1", dur=30), row("note", "A.MP4", note="murky"),
+                row("note", "A.MP4", 12, note="moray"), row("file_done", "A.MP4", rating="3", dur=30),
                 row("file_partial", "A.MP4", rating="0", dur=30)]
         d = tp.collect(rows)["A.MP4"]
-        self.assertEqual(d["rating"], 3)                    # file_partial — черновик, не оценка
-        self.assertEqual(d["file_notes"], ["мутно"])
-        self.assertEqual(d["notes"], [(12, "мурена")])
+        self.assertEqual(d["rating"], 3)                    # file_partial is a draft, not a rating
+        self.assertEqual(d["file_notes"], ["murky"])
+        self.assertEqual(d["notes"], [(12, "moray")])
         self.assertEqual(d["duration"], 30)
 
     def test_rating_filters(self):
@@ -109,7 +109,7 @@ class PlanTest(unittest.TestCase):
         zero, one, none = {"rating": 0}, {"rating": 1}, {"rating": None}
         self.assertTrue(tp.zero_rated(zero, args0))
         self.assertFalse(tp.zero_rated(zero, argsall))
-        self.assertFalse(tp.below_min_rating(none, args0))   # без --min-rating непросмотренные берутся
+        self.assertFalse(tp.below_min_rating(none, args0))   # without --min-rating unreviewed files are taken
         self.assertTrue(tp.below_min_rating(none, args2))
         self.assertTrue(tp.below_min_rating(one, args2))
 
@@ -133,7 +133,7 @@ class PlanTest(unittest.TestCase):
         good = triage_csv(self.dir / "good", [])
         self.assertTrue(tp.triage_csv_ok(tp.read_rows(good), good))
         bad = self.dir / "bad.csv"
-        bad.write_text("logged_at,event,file\n", encoding="utf-8")     # только шапка, «,»
+        bad.write_text("logged_at,event,file\n", encoding="utf-8")     # header only, ","
         self.assertFalse(tp.triage_csv_ok(tp.read_rows(bad), bad))
         bad.write_text("logged_at,event,file\n1,file_done,X.MP4\n", encoding="utf-8")
         self.assertFalse(tp.triage_csv_ok(tp.read_rows(bad), bad))
@@ -141,19 +141,19 @@ class PlanTest(unittest.TestCase):
         empty.write_text("", encoding="utf-8")
         self.assertTrue(tp.triage_csv_ok(tp.read_rows(empty), empty))
 
-    # ---------------------------------------------------------------- конфиг
+    # ---------------------------------------------------------------- config
 
     def test_config_errors_are_reported_with_line_numbers(self):
         conf = self.config("pad_before = 7\npad.fsh = 3\nmerge_gap = -1\nbogus = 1\nno equals here\n")
         with self.assertRaises(SystemExit) as cm:
             tp.load_config(conf)
         msg = str(cm.exception)
-        for part in ("строка 2", "«fsh»", "строка 3", "строка 4", "«bogus»", "строка 5"):
+        for part in ("line 2", "'fsh'", "line 3", "line 4", "'bogus'", "line 5"):
             self.assertIn(part, msg)
 
     def test_config_comments_and_pad_forms(self):
-        cfg, pads = tp.load_config(self.config("# комментарий\n pad.jump = 10 ; как в примере\n"
-                                               "pad.shot = 6 / 3\nout = Clips # хвост\n"))
+        cfg, pads = tp.load_config(self.config("# comment\n pad.jump = 10 ; as in the example\n"
+                                               "pad.shot = 6 / 3\nout = Clips # trailing\n"))
         self.assertEqual(pads, {"jump": (10, 10), "shot": (6, 3)})
         self.assertEqual(cfg, {"out": "Clips"})
 

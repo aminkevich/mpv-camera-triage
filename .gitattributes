@@ -1,4 +1,4 @@
-# текстовые файлы — с нормализацией концов строк
+# text files with line-ending normalization
 * text=auto
 *.ps1 text eol=crlf
 *.lua text eol=lf

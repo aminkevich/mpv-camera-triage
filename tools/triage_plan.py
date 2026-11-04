@@ -1,9 +1,9 @@
 """
-triage_plan.py — общий план отрезков из _triage.csv для make_clips.py и make_timeline.py.
+triage_plan.py — shared segment plan from _triage.csv for make_clips.py and make_timeline.py.
 
-Здесь всё, что должно совпадать у нарезки и у экспорта в монтажку: чтение CSV и make_clips.conf,
-общие ключи командной строки, отбор файлов по оценке, отрезки вокруг меток и их склейка.
-Один план — одни и те же отрезки и в Clips/, и на таймлайне.
+Everything that must be the same for cutting and for the editing export lives here: reading the
+CSV and make_clips.conf, shared command-line options, selecting files by rating, segments around
+marks and merging them. One plan — the same segments in Clips/ and on the timeline.
 """
 import csv
 import re
@@ -13,9 +13,9 @@ from pathlib import Path
 CSV_NAME = "_triage.csv"
 CONFIG_NAME = "make_clips.conf"
 PROXY_EXTS = (".LRV", ".LRF")
-# Метки camera_triage.lua в порядке клавиатуры → цвет маркера в Resolve (make_timeline).
-# Единственный список для Python: колонки отчёта, цвета, проверка pad.<метка> в конфиге.
-# Новую метку добавлять сюда и в LABELS / HELP в camera_triage.lua; tests/test_labels.py сверяет.
+# camera_triage.lua labels in keyboard order → Resolve marker color (make_timeline).
+# The single list for Python: report columns, colors, the pad.<label> config check.
+# Add a new label here and to LABELS / HELP in camera_triage.lua; tests/test_labels.py checks they match.
 LABELS = {
     "highlight": "Yellow", "scenery": "Mint", "people": "Pink", "bad": "Cocoa",
     "fish": "Blue", "shot": "Red", "catch": "Green", "wildlife": "Cyan", "dive": "Sky",
@@ -23,7 +23,7 @@ LABELS = {
 }
 KNOWN_LABELS = set(LABELS)
 
-# встроенные значения; конфиг и командная строка их переопределяют
+# built-in values; the config and the command line override them
 DEFAULTS = {
     "pad_before": 5.0, "pad_after": 5.0, "clip_pad": 0.5, "merge_gap": 2.0,
     "exclude": "bad", "point_exclude": "", "min_rating": None, "out": "Clips",
@@ -33,10 +33,10 @@ X264_PRESETS = {"ultrafast", "superfast", "veryfast", "faster", "fast", "medium"
                 "slow", "slower", "veryslow"}
 
 
-# ---------------------------------------------------------------- настройки
+# ---------------------------------------------------------------- settings
 
 def parse_pad(v):
-    """«6/3» → (6, 3); «7» → (7, 7)."""
+    """"6/3" → (6, 3); "7" → (7, 7)."""
     parts = [x.strip() for x in v.split("/")]
     if len(parts) == 1:
         parts *= 2
@@ -49,14 +49,14 @@ def parse_pad(v):
 
 
 def load_config(path):
-    """Простой формат «ключ = значение», комментарии # и ;. Возвращает (settings, label_pads)."""
+    """Simple "key = value" format, comments # and ;. Returns (settings, label_pads)."""
     cfg, pads, errors = {}, {}, []
     for n, raw in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
         line = raw.split("#", 1)[0].split(";", 1)[0].strip()
         if not line:
             continue
         if "=" not in line:
-            errors.append(f"строка {n}: нет «=»: {raw.strip()}")
+            errors.append(f"line {n}: no '=': {raw.strip()}")
             continue
         key, val = (x.strip() for x in line.split("=", 1))
         key = key.lower().replace("-", "_")
@@ -64,8 +64,8 @@ def load_config(path):
             if key.startswith("pad."):
                 label = key[4:]
                 if label not in KNOWN_LABELS:
-                    errors.append(f"строка {n}: неизвестная метка «{label}» "
-                                  f"(есть: {', '.join(sorted(KNOWN_LABELS))})")
+                    errors.append(f"line {n}: unknown label '{label}' "
+                                  f"(known: {', '.join(sorted(KNOWN_LABELS))})")
                     continue
                 pads[label] = parse_pad(val)
             elif key in ("pad_before", "pad_after", "clip_pad", "merge_gap"):
@@ -81,53 +81,53 @@ def load_config(path):
             elif key in ("exclude", "point_exclude", "out"):
                 cfg[key] = val
             else:
-                errors.append(f"строка {n}: неизвестный параметр «{key}»")
+                errors.append(f"line {n}: unknown setting '{key}'")
         except ValueError:
-            errors.append(f"строка {n}: неверное значение для {key}: «{val}»")
+            errors.append(f"line {n}: invalid value for {key}: '{val}'")
     if errors:
-        sys.exit(f"Ошибки в {path}:\n  " + "\n  ".join(errors))
+        sys.exit(f"Errors in {path}:\n  " + "\n  ".join(errors))
     if cfg.get("reencode_crf") is None:
         cfg.pop("reencode_crf", None)
     return cfg, pads
 
 
 def add_plan_args(ap):
-    """Ключи, общие для нарезки и экспорта: папки, конфиг, отступы, склейка, отбор."""
-    ap.add_argument("folders", nargs="+", type=Path, help="папки футажа или родительские папки")
+    """Options shared by cutting and export: folders, config, pads, merging, selection."""
+    ap.add_argument("folders", nargs="+", type=Path, help="footage folders or their parent folders")
     ap.add_argument("--config", type=Path,
-                    help=f"файл настроек (по умолчанию {CONFIG_NAME} рядом со скриптом, если есть)")
-    ap.add_argument("--pad-before", type=float, help="секунд до точечной метки, для всех меток (5)")
-    ap.add_argument("--pad-after", type=float, help="секунд после точечной метки, для всех меток (5)")
-    ap.add_argument("--clip-pad", type=float, help="запас вокруг отрезков i/o (0.5)")
-    ap.add_argument("--merge-gap", type=float, help="склеивать отрезки ближе N секунд (2)")
-    ap.add_argument("--labels", help="только отрезки с этими метками, через запятую (например fish,shot)")
-    ap.add_argument("--exclude", help="метки, из которых отрезки не делать (bad)")
+                    help=f"settings file (default: {CONFIG_NAME} next to the script, if present)")
+    ap.add_argument("--pad-before", type=float, help="seconds before a point mark, for all labels (5)")
+    ap.add_argument("--pad-after", type=float, help="seconds after a point mark, for all labels (5)")
+    ap.add_argument("--clip-pad", type=float, help="margin around i/o ranges (0.5)")
+    ap.add_argument("--merge-gap", type=float, help="merge segments closer than N seconds (2)")
+    ap.add_argument("--labels", help="only segments with these labels, comma-separated (e.g. fish,shot)")
+    ap.add_argument("--exclude", help="labels that never produce segments (bad)")
     ap.add_argument("--point-exclude",
-                    help="точечные метки, которые сами отрезков не дают (например dive)")
+                    help="point labels that do not produce segments on their own (e.g. dive)")
     ap.add_argument("--min-rating", type=int,
-                    help="только файлы с оценкой ≥ N; при N>0 непросмотренные файлы пропускаются. "
-                         "По умолчанию — всё, кроме файлов с оценкой 0")
+                    help="only files rated ≥ N; with N>0 unreviewed files are skipped. "
+                         "Default: everything except files rated 0")
     ap.add_argument("--no-marks", action="store_true",
-                    help="только отрезки i/o; точечные метки лишь добавляют метки отрезкам")
+                    help="only i/o ranges; point marks just add labels to them")
 
 
 def finish_args(ap, a):
-    """Встроенные значения → конфиг → командная строка; множества меток для фильтров."""
+    """Built-in values → config → command line; label sets for the filters."""
     cfg_path = a.config or Path(__file__).resolve().with_name(CONFIG_NAME)
     if a.config and not a.config.exists():
-        ap.error(f"файл настроек не найден: {a.config}")
+        ap.error(f"settings file not found: {a.config}")
     cfg, pads = load_config(cfg_path) if cfg_path.exists() else ({}, {})
     a.config_used = cfg_path if cfg_path.exists() else None
 
     cli = {k: getattr(a, k) for k in DEFAULTS if getattr(a, k, None) is not None}
     for k, v in DEFAULTS.items():
         setattr(a, k, cli.get(k, cfg.get(k, v)))
-    # --pad-before/--pad-after в командной строке перекрывают и отступы по меткам
+    # --pad-before/--pad-after on the command line also override per-label pads
     a.label_pads = {lab: (a.pad_before if "pad_before" in cli else b,
                           a.pad_after if "pad_after" in cli else af)
                     for lab, (b, af) in pads.items()}
     if a.merge_gap < 0 or a.pad_before < 0 or a.pad_after < 0 or a.clip_pad < 0:
-        ap.error("отступы и --merge-gap не могут быть отрицательными")
+        ap.error("pads and --merge-gap cannot be negative")
     a.only = label_set(a.labels)
     a.exclude_set = label_set(a.exclude)
     a.point_exclude_set = label_set(a.point_exclude)
@@ -139,17 +139,17 @@ def pads_for(args, label):
 
 
 def describe_settings(args):
-    src = f"конфиг: {args.config_used}" if args.config_used else "конфиг не найден, встроенные значения"
-    lines = [f"Настройки ({src})",
-             f"  отступы: −{args.pad_before:g} / +{args.pad_after:g} с"]
+    src = f"config: {args.config_used}" if args.config_used else "no config found, built-in values"
+    lines = [f"Settings ({src})",
+             f"  pads: −{args.pad_before:g} / +{args.pad_after:g} s"]
     special = {lab: p for lab, p in args.label_pads.items() if p != (args.pad_before, args.pad_after)}
     if special:
-        lines[-1] += ";  по меткам: " + ", ".join(
+        lines[-1] += ";  per label: " + ", ".join(
             f"{lab} −{b:g}/+{af:g}" for lab, (b, af) in sorted(special.items()))
-    lines.append(f"  клип i/o ±{args.clip_pad:g} с, склейка ≤ {args.merge_gap:g} с, "
-                 f"исключить: {args.exclude or '—'}"
-                 + (f", точки без клипа: {args.point_exclude}" if args.point_exclude else "")
-                 + (f", мин. оценка: {args.min_rating}" if args.min_rating is not None else ""))
+    lines.append(f"  i/o clip ±{args.clip_pad:g} s, merge ≤ {args.merge_gap:g} s, "
+                 f"exclude: {args.exclude or '—'}"
+                 + (f", points without a segment: {args.point_exclude}" if args.point_exclude else "")
+                 + (f", min rating: {args.min_rating}" if args.min_rating is not None else ""))
     return "\n".join(lines)
 
 
@@ -157,7 +157,7 @@ def label_set(s):
     return {x.strip() for x in (s or "").split(",") if x.strip()}
 
 
-# ---------------------------------------------------------------- разметка
+# ---------------------------------------------------------------- markup
 
 def hms_dash(t):
     t = int(t)
@@ -180,8 +180,8 @@ def read_rows(path):
 
 
 def triage_csv_ok(rows, path=None):
-    """False, если _triage.csv пересохранён в другой программе (нет нужных колонок).
-    Без строк данных проверяется шапка файла (path)."""
+    """False if _triage.csv was re-saved in another program (the required columns are missing).
+    Without data rows the file header (path) is checked."""
     need = {"event", "file", "time_ms", "end_ms", "label", "rating"}
     if rows:
         return need <= set(rows[0].keys())
@@ -193,11 +193,11 @@ def triage_csv_ok(rows, path=None):
 
 
 def find_csvs(folders, skip_dir=None):
-    """Все _triage.csv в папках (рекурсивно), кроме лежащих внутри skip_dir (Clips)."""
+    """All _triage.csv in the folders (recursively), except those inside skip_dir (Clips)."""
     csvs = []
     for root in folders:
         if not root.exists():
-            print(f"⚠ Папка не найдена: {root}")
+            print(f"⚠ Folder not found: {root}")
             continue
         csvs += [p for p in sorted(root.rglob(CSV_NAME))
                  if not skip_dir or skip_dir not in p.relative_to(root).parts[:-1]]
@@ -209,8 +209,8 @@ _GOPR = re.compile(r"^GOPR(\d{4})\.", re.I)
 
 
 def file_order_key(fname):
-    """Порядок файлов как в camera_triage.lua: главы одной записи GoPro (GX010123, GX020123, …)
-    подряд, остальные — по имени."""
+    """File order as in camera_triage.lua: chapters of one GoPro recording (GX010123, GX020123, …)
+    follow each other, other files by name."""
     up = fname.upper()
     for rx in _GOPRO:
         m = rx.match(up)
@@ -234,7 +234,7 @@ def collect(rows):
                                      "rating": None, "duration": None, "activity": ""})
         d["activity"] = (r.get("activity") or "").strip() or d["activity"]
         ev = r.get("event")
-        if ev == "file_done":                       # последняя запись побеждает
+        if ev == "file_done":                       # the last row wins
             d["rating"] = to_int(r.get("rating"))
             dur = to_int(r.get("duration_ms"))
             d["duration"] = dur / 1000 if dur else None
@@ -266,7 +266,7 @@ def sorted_files(files):
 
 
 def zero_rated(d, args):
-    """Файл с оценкой 0 («мусор») не берётся, кроме --min-rating 0."""
+    """A file rated 0 ("junk") is not taken, except with --min-rating 0."""
     return d["rating"] == 0 and args.min_rating != 0
 
 
@@ -275,8 +275,8 @@ def below_min_rating(d, args):
 
 
 def build_segments(d, args, no_marks=None):
-    """Склеенные отрезки [(start, end, labels:set)] одного файла, без фильтра --labels.
-    no_marks=None — как в командной строке (--no-marks)."""
+    """Merged segments [(start, end, labels:set)] of one file, without the --labels filter.
+    no_marks=None — as on the command line (--no-marks)."""
     if no_marks is None:
         no_marks = args.no_marks
     exclude, point_exclude = args.exclude_set, args.point_exclude_set
@@ -287,14 +287,14 @@ def build_segments(d, args, no_marks=None):
             labs.add(clabel)
         kept = labs - exclude
         if labs and not kept:
-            continue                                # i … b … o — клип целиком «плохой»
+            continue                                # i … b … o — the whole clip is "bad"
         segs.append((max(0.0, s - args.clip_pad), e + args.clip_pad, kept or {"clip"}))
     if not no_marks:
         for t, lab in d["marks"]:
             if lab in exclude or lab in point_exclude:
                 continue
             if any(s <= t <= e for s, e, _ in d["clips"]):
-                continue                            # внутри i/o — уже учтена в метках клипа
+                continue                            # inside i/o — already counted in the clip's labels
             before, after = pads_for(args, lab)
             segs.append((max(0.0, t - before), t + after, {lab}))
     merged = merge(segs, args.merge_gap)
@@ -304,7 +304,7 @@ def build_segments(d, args, no_marks=None):
 
 
 def selected_segments(d, args):
-    """Отрезки с учётом --no-marks и --labels (то, что режем / кладём на таймлайн сейчас)."""
+    """Segments with --no-marks and --labels applied (what is cut / put on the timeline now)."""
     segs = build_segments(d, args)
     if args.only:
         segs = [x for x in segs if x[2] & args.only]
@@ -322,10 +322,10 @@ def merge(segs, gap):
     return out
 
 
-# ---------------------------------------------------------------- исходники
+# ---------------------------------------------------------------- sources
 
 def find_source(folder, fname):
-    """(путь, это_прокси) или (None, False). Оригинал MP4, если есть, иначе прокси LRV/LRF."""
+    """(path, is_proxy) or (None, False). The original MP4 if present, otherwise an LRV/LRF proxy."""
     p = folder / fname
     if p.exists():
         return p, False
@@ -333,7 +333,7 @@ def find_source(folder, fname):
     if up[:2] in ("GX", "GH") and up.endswith(".MP4"):
         cands = [folder / ("GL" + stem[2:] + ".LRV")]           # GoPro
     else:
-        cands = [folder / (stem + ".LRF"), folder / (stem + ".LRV")]   # DJI и прочие
+        cands = [folder / (stem + ".LRF"), folder / (stem + ".LRV")]   # DJI and others
     for proxy in cands:
         if proxy.exists():
             return proxy, True
@@ -341,7 +341,7 @@ def find_source(folder, fname):
 
 
 def setup_console():
-    """Вывод в файл (> log.txt) на Windows шёл бы в cp1252 — переключить на UTF-8."""
+    """Output redirected to a file (> log.txt) on Windows would be cp1252 — switch to UTF-8."""
     for stream in (sys.stdout, sys.stderr):
         try:
             if stream.isatty():

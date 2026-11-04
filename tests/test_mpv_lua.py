@@ -1,6 +1,6 @@
-"""camera_triage.lua в настоящем mpv без окна: порядок глав GoPro, Del, u, метка, оценка + Enter,
-сортировка CSV при выходе. Нужны mpv и ffmpeg (путь к mpv — переменная MPV, если он не в PATH);
-без них тест пропускается."""
+"""camera_triage.lua in a real windowless mpv: GoPro chapter order, Del, u, a mark, rating + Enter,
+CSV sorting on exit. Requires mpv and ffmpeg (the mpv path via the MPV variable if it is not in PATH);
+without them the test is skipped."""
 import re
 import subprocess
 import tempfile
@@ -13,7 +13,7 @@ MPV = find_mpv()
 DRIVER = Path(__file__).with_name("mpv_driver.lua")
 
 
-@unittest.skipUnless(MPV and FFMPEG, "нужны mpv и ffmpeg")
+@unittest.skipUnless(MPV and FFMPEG, "requires mpv and ffmpeg")
 class MpvLuaTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -32,7 +32,7 @@ class MpvLuaTest(unittest.TestCase):
                f"--script={LUA}", f"--script={DRIVER}", f"--script-opts=driver-csv={cls.csv}", str(folder)]
         cls.proc = subprocess.run(cmd, capture_output=True, timeout=90)
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
-        # mpv называет скрипт по имени файла: [mpv_driver]
+        # mpv names the script after its file: [mpv_driver]
         cls.log = [m.group(1) for m in (re.search(r"\[mpv_driver\] (.*)$", ln) for ln in lines) if m]
         cls.errors = [ln for ln in lines if "[camera_triage]" in ln and re.search(r"\]\[(e|f)\]", ln)]
         cls.final = [ln for ln in cls.csv.read_text(encoding="utf-8-sig").splitlines()[1:] if ln]
@@ -63,7 +63,7 @@ class MpvLuaTest(unittest.TestCase):
                          [("mark", "GX010123.MP4", "fish", ""), ("mark", "GX010123.MP4", "shot", ""),
                           ("file_done", "GX010123.MP4", "", "2")])
         self.assertEqual(events[0][4], "5000")
-        # на паузе метка ставится точно в кадр, куда пришёл переход на 12 с (59.94 fps — 11.995)
+        # while paused the mark lands exactly on the frame the seek to 12 s reached (59.94 fps — 11.995)
         self.assertAlmostEqual(int(events[1][4]), 12000, delta=17)
         playing = [ln for ln in self.log if ln.startswith("PLAYING ")]
         self.assertEqual(playing, ["PLAYING GX010123.MP4", "PLAYING GX020123.MP4"])

@@ -1,5 +1,5 @@
-"""Сквозной прогон на настоящих крошечных видео: make_clips, make_timeline, make_report.
-Нужны ffmpeg и ffprobe; без них тесты пропускаются."""
+"""End-to-end run on real tiny videos: make_clips, make_timeline, make_report.
+Requires ffmpeg and ffprobe; without them the tests are skipped."""
 import csv
 import json
 import subprocess
@@ -18,7 +18,7 @@ def duration(path):
     return float(json.loads(out.stdout)["format"]["duration"])
 
 
-@unittest.skipUnless(FFMPEG and FFPROBE, "нужны ffmpeg и ffprobe")
+@unittest.skipUnless(FFMPEG and FFPROBE, "requires ffmpeg and ffprobe")
 class EndToEndTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -31,7 +31,7 @@ class EndToEndTest(unittest.TestCase):
         make_video(cls.folder / "GX010123.MP4", 20, timecode="10:20:30:15")
         make_video(cls.folder / "GX020123.MP4", 10, timecode="10:20:50:16")
         make_video(cls.folder / "DJI_0001.MP4", 10, fps="30")
-        make_video(cls.folder / "GX010124.MP4", 5)                  # не открывался
+        make_video(cls.folder / "GX010124.MP4", 5)                  # never opened
         triage_csv(cls.folder, [
             row("mark", "GX010123.MP4", 5, label="fish"), row("clip", "GX010123.MP4", 10, 14, label="dive"),
             row("file_done", "GX010123.MP4", rating="3", dur=20),
@@ -49,18 +49,18 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         clips = self.folder / "Clips"
         names = sorted(p.name for p in clips.glob("*.mp4"))
-        # fish 5 ±5 и клип i/o 10–14 ±0.5 склеены в 0–14.5 с
+        # fish 5 ±5 and the i/o clip 10–14 ±0.5 merge into 0–14.5 s
         self.assertEqual(names, ["DJI_0001_00-00-03_7s_jump.mp4", "GX010123_00-00-00_14s_dive+fish.mp4",
                                  "GX020123_00-00-00_7s_catch.mp4"])
         with open(clips / "_clips.csv", encoding="utf-8-sig") as f:
             index = {r["clip"]: r for r in csv.DictReader(f, delimiter=";")}
         for name in names:
             entry = index[name]
-            # -c copy: старт на ключевом кадре не позже запланированного, длительность файла ≈ индекс
+            # -c copy: starts on a keyframe no later than planned, file duration ≈ index
             self.assertAlmostEqual(duration(clips / name), int(entry["duration_ms"]) / 1000, delta=0.15)
-        self.assertIn("уже было 0", res.stdout)
+        self.assertIn("already existed 0", res.stdout)
         again = run_tool("make_clips.py", self.folder, "--config", self.conf)
-        self.assertIn("нарезано 0, уже было 3", again.stdout)
+        self.assertIn("cut 0, already existed 3", again.stdout)
 
     def test_make_clips_into_project_folder(self):
         out = self.base / "Project" / "Clips"
@@ -90,7 +90,7 @@ class EndToEndTest(unittest.TestCase):
         with open(self.base / "Footage" / "_report_folders.csv", encoding="utf-8-sig") as f:
             total = list(csv.DictReader(f, delimiter=";"))[-1]
         self.assertEqual((total["videos"], total["done"], total["not_opened"]), ("4", "3", "1"))
-        self.assertEqual(total["unknown_duration"], "0")              # --probe дочитал неоткрытое
+        self.assertEqual(total["unknown_duration"], "0")              # --probe filled in the unopened one
         self.assertAlmostEqual(int(total["duration_ms"]) / 1000, 45, delta=0.5)
 
 
