@@ -13,9 +13,15 @@ from pathlib import Path
 CSV_NAME = "_triage.csv"
 CONFIG_NAME = "make_clips.conf"
 PROXY_EXTS = (".LRV", ".LRF")
-# метки camera_triage.lua — для проверки опечаток в pad.<метка>
-KNOWN_LABELS = {"highlight", "scenery", "people", "bad", "fish", "shot", "catch", "wildlife",
-                "dive", "jump", "trick", "crash", "ride"}
+# Метки camera_triage.lua в порядке клавиатуры → цвет маркера в Resolve (make_timeline).
+# Единственный список для Python: колонки отчёта, цвета, проверка pad.<метка> в конфиге.
+# Новую метку добавлять сюда и в LABELS / HELP в camera_triage.lua; tests/test_labels.py сверяет.
+LABELS = {
+    "highlight": "Yellow", "scenery": "Mint", "people": "Pink", "bad": "Cocoa",
+    "fish": "Blue", "shot": "Red", "catch": "Green", "wildlife": "Cyan", "dive": "Sky",
+    "jump": "Purple", "trick": "Fuchsia", "crash": "Rose", "ride": "Lavender",
+}
+KNOWN_LABELS = set(LABELS)
 
 # встроенные значения; конфиг и командная строка их переопределяют
 DEFAULTS = {

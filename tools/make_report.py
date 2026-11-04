@@ -42,22 +42,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import triage_plan as tp                    # noqa: E402  общее чтение _triage.csv
 
 VIDEO_EXTS = {".mp4", ".mov"}
-# порядок меток — как на клавиатуре в camera_triage.lua
-LABELS = ["highlight", "scenery", "people", "bad", "fish", "shot", "catch", "wildlife", "dive",
-          "jump", "trick", "crash", "ride"]
+# порядок меток — как на клавиатуре в camera_triage.lua (общий список в triage_plan);
+# метки, которых в нём нет (старые, переименованные), получают колонки в конце — см. main
+LABELS = list(tp.LABELS)
 TRIAGE_COLS = ["logged_at", "event", "activity", "file", "src", "time_ms", "end_ms", "time_hms",
                "label", "rating", "note", "speed_pct", "duration_ms", "duration_hms", "camera_time"]
 
 DONE, DRAFT, STARTED, NEW = "просмотрен", "оценка без Enter", "начат", "не открыт"
 
-FOLDER_COLS = (["folder", "status", "activity", "shot_from", "shot_to", "videos", "copies",
-                "done", "draft",
-                "started", "not_opened", "rated_0", "rated_1", "rated_2", "rated_3",
-                "duration_hms", "duration_ms", "reviewed_hms", "reviewed_ms", "unknown_duration",
-                "marks", "clips", "notes"] + LABELS + ["last_triage"])
-FILE_COLS = (["folder", "file", "status", "rating", "rating_draft", "activity", "camera_time",
-              "duration_ms", "duration_hms", "marks", "clips", "clips_hms", "notes"] + LABELS
-             + ["file_notes", "viewed_as", "on_disk", "copy_of", "copies", "last_triage"])
+
+def folder_cols(labels=LABELS):
+    return (["folder", "status", "activity", "shot_from", "shot_to", "videos", "copies",
+             "done", "draft", "started", "not_opened", "rated_0", "rated_1", "rated_2", "rated_3",
+             "duration_hms", "duration_ms", "reviewed_hms", "reviewed_ms", "unknown_duration",
+             "marks", "clips", "notes"] + list(labels) + ["last_triage"])
+
+
+def file_cols(labels=LABELS):
+    return (["folder", "file", "status", "rating", "rating_draft", "activity", "camera_time",
+             "duration_ms", "duration_hms", "marks", "clips", "clips_hms", "notes"] + list(labels)
+            + ["file_notes", "viewed_as", "on_disk", "copy_of", "copies", "last_triage"])
+
+
 EVENT_COLS = ["folder"] + TRIAGE_COLS + ["file_rating", "file_status", "copy_of"]
 
 OUT_NAMES = {"folders": "_report_folders.csv", "files": "_report_files.csv",
@@ -195,7 +201,7 @@ def read_folder(folder, csv_path, args):
 
 # ---------------------------------------------------------------- таблицы
 
-def file_row(folder_name, f):
+def file_row(folder_name, f, labels=LABELS):
     row = {"folder": folder_name, "file": f["file"], "status": f["status"],
            "rating": f["rating"], "rating_draft": f["draft"], "activity": f["activity"],
            "camera_time": f["camera_time"], "duration_ms": f["duration_ms"],
@@ -204,12 +210,12 @@ def file_row(folder_name, f):
            "file_notes": " | ".join(f["file_notes"]), "viewed_as": ",".join(sorted(f["src"])),
            "on_disk": f["on_disk"], "copy_of": f.get("copy_of", ""), "copies": f.get("copies", 0),
            "last_triage": f["last"]}
-    for lab in LABELS:
+    for lab in labels:
         row[lab] = f["labels"].get(lab, 0)
     return row
 
 
-def folder_row(folder_name, files, state):
+def folder_row(folder_name, files, state, labels=LABELS):
     fs = list(files.values())
     st = Counter(f["status"] for f in fs)
     dates = sorted(f["camera_time"][:10] for f in fs if f["camera_time"])
@@ -241,7 +247,7 @@ def folder_row(folder_name, files, state):
            "last_triage": max((f["last"] for f in fs), default="")}
     for r in range(4):
         row[f"rated_{r}"] = sum(1 for f in fs if f["status"] == DONE and f["rating"] == r)
-    for lab in LABELS:
+    for lab in labels:
         row[lab] = sum(f["labels"].get(lab, 0) for f in fs)
     return row
 
@@ -402,23 +408,27 @@ def main():
         if files or state == "bad":
             read.append((name, files, events, state))
     copies = mark_copies([(name, f) for name, files, _, _ in read for f in files.values()])
+    unknown = sorted({lab for _, files, _, _ in read for f in files.values() for lab in f["labels"]
+                      if lab and lab not in tp.LABELS})
+    labels = LABELS + unknown
 
     folders, files_t, events_t, unique = [], [], [], {}
     for name, files, events, state in read:
-        folders.append(folder_row(name, files, state))
+        folders.append(folder_row(name, files, state, labels))
         for _, f in sorted(files.items(), key=lambda kv: tp.file_order_key(kv[0])):
-            files_t.append(file_row(name, f))
+            files_t.append(file_row(name, f, labels))
             if not f.get("copy_of"):
                 unique[(name, f["file"].upper())] = f
         events_t += [event_row(name, r, files) for r in events]
     # ИТОГО — по уникальным видео: копии папок (проект, экспорт, бэкап) не умножают архив
-    total = folder_row("ИТОГО", unique, "ok")
+    total = folder_row("ИТОГО", unique, "ok", labels)
     total["status"] = f"папок {len(folders)}" + (f", копий видео {copies}" if copies else "")
     total["copies"] = copies
     folders.append(total)
 
     written = []
-    for key, cols, rows in (("folders", FOLDER_COLS, folders), ("files", FILE_COLS, files_t),
+    folder_c, file_c = folder_cols(labels), file_cols(labels)
+    for key, cols, rows in (("folders", folder_c, folders), ("files", file_c, files_t),
                             ("events", EVENT_COLS, events_t)):
         path = out / OUT_NAMES[key]
         try:
@@ -428,15 +438,15 @@ def main():
             print(f"✗ {path} открыт в другой программе (Excel?) — закрой и запусти ещё раз")
     if args.xlsx:
         try:
-            if write_xlsx(out / XLSX_NAME, [("Папки", FOLDER_COLS, folders),
-                                            ("Файлы", FILE_COLS, files_t),
+            if write_xlsx(out / XLSX_NAME, [("Папки", folder_c, folders),
+                                            ("Файлы", file_c, files_t),
                                             ("События", EVENT_COLS, events_t)]):
                 written.append(XLSX_NAME)
         except PermissionError:
             print(f"✗ {out / XLSX_NAME} открыт в другой программе (Excel?) — закрой и запусти ещё раз")
 
     t = folders[-1]
-    top = sorted(((lab, t[lab]) for lab in LABELS if t[lab]), key=lambda x: -x[1])
+    top = sorted(((lab, t[lab]) for lab in labels if t[lab]), key=lambda x: -x[1])
     print(f"Папок: {len(folders) - 1}, видео: {t['videos']}, просмотрено: {t['done']}"
           f" (оценка без Enter {t['draft']}, начато {t['started']}, не открыто {t['not_opened']})")
     if copies:
@@ -445,6 +455,8 @@ def main():
         print(f"Копии: {copies} видео ещё раз лежат в других папках ({', '.join(cf[:5])}"
               + (f" и ещё {len(cf) - 5}" if len(cf) > 5 else "") + ") — в итог вошли один раз"
               + (f"; у {diff} разметка отличается от основной копии" if diff else ""))
+    if unknown:
+        print(f"Метки не из списка camera_triage.lua: {', '.join(unknown)} — колонки в конце таблиц")
     print(f"Длительность: {t['duration_hms'] or '—'}"
           + (f" (у {t['unknown_duration']} видео неизвестна"
              + (": нет файла на диске)" if args.probe else " — --probe прочитает)")

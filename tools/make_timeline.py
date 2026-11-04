@@ -226,12 +226,8 @@ def short(text, n=40):
     return text if len(text) <= n else text[:n - 1].rstrip() + "…"
 
 
-# Цвета маркеров Resolve по меткам (в EDL; FCPXML цвет не передаёт)
-LABEL_COLORS = {
-    "fish": "Blue", "shot": "Red", "catch": "Green", "wildlife": "Cyan", "dive": "Sky",
-    "scenery": "Mint", "people": "Pink", "highlight": "Yellow", "bad": "Cocoa",
-    "jump": "Purple", "trick": "Fuchsia", "crash": "Rose", "ride": "Lavender",
-}
+# Цвета маркеров Resolve по меткам (в EDL; FCPXML цвет не передаёт) — общий список в triage_plan
+LABEL_COLORS = tp.LABELS
 NOTE_COLOR, FILE_NOTE_COLOR, OTHER_COLOR = "Cream", "Sand", "Lemon"
 
 

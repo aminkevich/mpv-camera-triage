@@ -138,6 +138,7 @@ py -m unittest discover tests
 | `test_make_clips.py` | имена клипов, `--out`, `--prune` с фильтрами не удаляет лишнего |
 | `test_make_timeline.py` | таймкоды (и drop frame), FCPXML: отрезки встык и на кадрах, маркеры внутри; EDL совпадает с FCPXML |
 | `test_make_report.py` | статусы видео и папок, копии в проекте и экспорте, ИТОГО без повторов |
+| `test_labels.py` | список меток в `camera_triage.lua` (клавиши, подсказка F1) совпадает с `triage_plan.py` (отчёт, цвета Resolve) |
 | `test_integration.py` | все три скрипта на настоящих крошечных видео (нужен ffmpeg) |
 | `test_mpv_lua.py` | `camera_triage.lua` в mpv без окна: порядок глав, `Del`, `u`, метка, оценка + Enter, сортировка CSV (нужны mpv и ffmpeg; mpv ищется в PATH, в `C:\Program Files\MPV Player` или по переменной `MPV`) |
 
