@@ -1,30 +1,19 @@
--- resolve_markers.lua — _triage.csv markup → markers ON CLIPS in DaVinci Resolve.
+-- resolve_markers.lua — the part of the Resolve menu scripts that runs inside DaVinci Resolve.
 --
--- Runs inside Resolve from Workspace → Scripts → camera_triage … (install.ps1 creates the menu
--- entries). The free Resolve lists only Lua scripts in that menu, so the work is split:
---   1. here: collect the clips (current timeline or the whole Media Pool) with their file path,
---      frame rate and length;
---   2. resolve_markers.py --plan (run once with the Python bundled with Resolve): reads
---      _triage.csv next to each file and answers with the markers — the same ones as the .edl
---      of make_timeline.py, in source frames from the start of the file;
---   3. here: replace this script's markers on each clip with the new ones.
--- Markers placed by hand are not touched: ours carry the custom data "camera_triage".
--- Output goes to Workspace → Console and to %TEMP%\camera_triage_resolve.log.
+-- Resolve runs menu scripts in a sandbox: no file access (io, dofile, require), no way to start
+-- programs. So tools/resolve_markers.py reads _triage.csv itself and writes the menu scripts
+-- (Workspace → Scripts → camera_triage - …) as: the marker data, then this file, then one call.
+-- This file must therefore use only plain Lua and the Resolve API.
+--
+-- DATA: [file path in upper case, "\" separators] = { {t, duration, color, name, note}, ... } —
+-- times in seconds from the start of the file, sorted; duration 0 = a point marker.
 
 local M = {}
-local TAG = "camera_triage"
-local LOG = (os.getenv("TEMP") or os.getenv("TMP") or ".") .. "\\camera_triage_resolve.log"
-local say = print
+local TAG = "camera_triage"       -- customData of our markers: a rerun replaces them, remove deletes them
 
--- console + log file: if a menu script's output does not reach the Console, the log still has it
-local function log_say(text)
-    print(text)
-    local f = io.open(LOG, "ab")
-    if f then
-        f:write(os.date("%Y-%m-%d %H:%M:%S  "), tostring(text), "\r\n")
-        f:close()
-    end
-end
+-- Clip markers on timeline clips count frames from the start of the source file (as in the Media
+-- Pool); "item" would count from the first frame used on the timeline instead.
+M.TIMELINE_FRAMES = "source"
 
 local function list(t)
     -- Resolve returns lists as tables {[1] = a, [2] = b, ...}
@@ -59,45 +48,57 @@ local function clear(item)
     return n
 end
 
-local function split(line)
-    local fields = {}
-    for f in (line .. "\t"):gmatch("(.-)\t") do fields[#fields + 1] = f end
-    return fields
-end
-
-local function clean(text)
-    return (tostring(text or ""):gsub("[\t\r\n]+", " "))
-end
-
--- ask resolve_markers.py for the markers: request → answer (files in %TEMP%)
-local function ask_python(tools, python, request_lines)
-    local tmp = os.getenv("TEMP") or os.getenv("TMP") or "."
-    local request, answer = tmp .. "\\camera_triage_request.tsv", tmp .. "\\camera_triage_answer.tsv"
-    local f = assert(io.open(request, "wb"))
-    f:write(table.concat(request_lines, "\n"), "\n")
-    f:close()
-    os.remove(answer)
-    local cmd = string.format('""%s" "%s\\resolve_markers.py" --plan "%s" "%s" 2>&1"', python, tools, request, answer)
-    local p = io.popen(cmd)
-    local output = p and p:read("*a") or ""
-    if p then p:close() end
-    if output:match("%S") then say(output) end
-    local result = io.open(answer, "rb")
-    if not result then
-        say("camera_triage: no answer from " .. python .. " — is the Python path in the menu script right?")
-        return nil
+-- Resolve reports 59.94 / 29.97 / 23.976; the exact rates are 60000/1001 etc.
+function M.exact_fps(fps)
+    fps = tonumber(fps)
+    if not fps or fps <= 0 then return nil end
+    for _, n in ipairs({ 24, 30, 48, 60, 120, 240 }) do
+        if math.abs(fps - n * 1000 / 1001) < 0.01 then return n * 1000 / 1001 end
     end
-    local lines = {}
-    for line in result:lines() do lines[#lines + 1] = (line:gsub("\r$", "")) end
-    result:close()
-    os.remove(request)
-    os.remove(answer)
-    return lines
+    return fps
 end
 
-function M.run(resolve, mode, tools, python)
+function M.key(path)
+    return (tostring(path or ""):gsub("/", "\\"):upper())
+end
+
+-- markers of one file → {frame, length, color, name, note}; one marker per frame (Resolve's rule),
+-- so a marker on an occupied frame moves to the next one; nothing past the end of the file
+function M.plan(markers, fps, frames)
+    local out, used = {}, {}
+    for _, m in ipairs(markers) do
+        local f = math.max(0, math.floor(m[1] * fps + 0.5))
+        while used[f] do f = f + 1 end
+        if not frames or f < frames then
+            used[f] = true
+            local length = 1
+            if m[2] and m[2] > 0 then length = math.max(1, math.floor(m[2] * fps + 0.5)) end
+            if frames then length = math.max(1, math.min(length, frames - f)) end
+            out[#out + 1] = { f, length, m[3], m[4], m[5] or "" }
+        end
+    end
+    return out
+end
+
+-- put the markers of mp_item's file on item (the clip itself or a timeline clip using it)
+local function mark(item, mp_item, data)
+    local markers = data[M.key(mp_item:GetClipProperty("File Path"))]
+    local fps = M.exact_fps(mp_item:GetClipProperty("FPS"))
+    if not markers or not fps then return nil end
+    local frames = tonumber(mp_item:GetClipProperty("Frames") or "")
+    local shift = 0
+    if item ~= mp_item and M.TIMELINE_FRAMES == "item" then shift = math.floor(item:GetLeftOffset() or 0) end
+    clear(item)
+    local added, failed = 0, 0
+    for _, m in ipairs(M.plan(markers, fps, frames)) do
+        if item:AddMarker(m[1] - shift, m[3], m[4], m[5], m[2], TAG) then added = added + 1 else failed = failed + 1 end
+    end
+    return added, failed
+end
+
+function M.run(resolve, mode, data, baked)
     local project = resolve:GetProjectManager():GetCurrentProject()
-    if not project then say("camera_triage: no project is open"); return end
+    if not project then print("camera_triage: no project is open"); return end
     local timeline = project:GetCurrentTimeline()
     local pool = media_pool_clips(project:GetMediaPool():GetRootFolder())
 
@@ -109,76 +110,44 @@ function M.run(resolve, mode, tools, python)
                 if item:GetMediaPoolItem() then removed = removed + clear(item) end   -- not titles, generators
             end
         end
-        say("camera_triage: removed " .. removed .. " marker(s) added by this script")
+        print("camera_triage: removed " .. removed .. " marker(s) added by this script")
         return
     end
 
     local targets, where = {}, nil
     if mode == "timeline" then
-        if not timeline then say("camera_triage: no timeline is open"); return end
+        if not timeline then print("camera_triage: no timeline is open"); return end
         for _, item in ipairs(timeline_items(timeline)) do
             local mp = item:GetMediaPoolItem()
-            if mp then targets[#targets + 1] = { item = item, mp = mp } end   -- not titles, generators
+            if mp then targets[#targets + 1] = { item, mp } end
         end
         where = 'timeline "' .. timeline:GetName() .. '"'
     else
-        for _, clip in ipairs(pool) do targets[#targets + 1] = { item = clip, mp = clip } end
+        for _, clip in ipairs(pool) do targets[#targets + 1] = { clip, clip } end
         where = "Media Pool"
     end
-    if #targets == 0 then say("camera_triage: " .. where .. " has no clips"); return end
-
-    local request = {}
-    for i, t in ipairs(targets) do
-        request[#request + 1] = table.concat({ i, clean(t.mp:GetClipProperty("File Path")),
-            clean(t.mp:GetClipProperty("FPS")), clean(t.mp:GetClipProperty("Frames")) }, "\t")
-    end
-    local answer = ask_python(tools, python, request)
-    if not answer then return end
 
     local done, markers, failed, skipped, seen = 0, 0, 0, {}, {}
-    for _, line in ipairs(answer) do
-        local f = split(line)
-        local t = targets[tonumber(f[1]) or 0]
-        if t and f[2] == "NONE" then
-            local name = t.item:GetName()
+    for _, t in ipairs(targets) do
+        local added, bad = mark(t[1], t[2], data)
+        if added then
+            done, markers, failed = done + 1, markers + added, failed + bad
+        else
+            local name = t[1]:GetName()
             if not seen[name] then seen[name] = true; skipped[#skipped + 1] = name end
-        elseif t and f[2] == "MARKUP" then
-            clear(t.item)
-            done = done + 1
-        elseif t and #f >= 6 then
-            if t.item:AddMarker(tonumber(f[2]), f[4], f[5], f[6], tonumber(f[3]), TAG) then
-                markers = markers + 1
-            else
-                failed = failed + 1
-            end
         end
     end
-    say("camera_triage: " .. where .. " — " .. done .. " clip(s) marked, " .. markers .. " marker(s)"
-        .. (failed > 0 and (", " .. failed .. " not accepted by Resolve") or ""))
+    print("camera_triage: " .. where .. " — " .. done .. " clip(s) marked, " .. markers .. " marker(s)"
+        .. (failed > 0 and (", " .. failed .. " not accepted by Resolve") or "")
+        .. "  (markup baked " .. tostring(baked) .. ")")
     if #skipped > 0 then
         table.sort(skipped)
         local shown = {}
         for i = 1, math.min(10, #skipped) do shown[i] = skipped[i] end
-        say("  without markup (" .. #skipped .. "): " .. table.concat(shown, ", ")
-            .. (#skipped > 10 and (" and " .. (#skipped - 10) .. " more") or ""))
+        print("  without markup (" .. #skipped .. "): " .. table.concat(shown, ", ")
+            .. (#skipped > 10 and (" and " .. (#skipped - 10) .. " more") or "")
+            .. " — run py tools\\resolve_markers.py <footage folder> again if they are marked")
     end
-end
-
--- Entry point of the menu launchers: finds the Resolve object, logs every step and any error.
-function M.main(mode, tools, python)
-    say = log_say
-    say("camera_triage: start " .. tostring(mode) .. "  (resolve=" .. type(resolve) .. ", Resolve()="
-        .. type(Resolve) .. ", bmd=" .. type(bmd) .. ", io.popen=" .. type(io and io.popen) .. ")")
-    local app = resolve
-    if app == nil and type(Resolve) == "function" then app = Resolve() end
-    if app == nil and type(bmd) == "table" and bmd.scriptapp then app = bmd.scriptapp("Resolve") end
-    if app == nil then
-        say("camera_triage: no Resolve object — the script cannot reach Resolve")
-        return
-    end
-    local ok, err = xpcall(function() M.run(app, mode, tools, python) end, debug.traceback)
-    if not ok then say("camera_triage: ERROR " .. tostring(err)) end
-    say("camera_triage: end")
 end
 
 return M
