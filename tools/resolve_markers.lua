@@ -9,10 +9,22 @@
 --      of make_timeline.py, in source frames from the start of the file;
 --   3. here: replace this script's markers on each clip with the new ones.
 -- Markers placed by hand are not touched: ours carry the custom data "camera_triage".
--- Output goes to Workspace → Console.
+-- Output goes to Workspace → Console and to %TEMP%\camera_triage_resolve.log.
 
 local M = {}
 local TAG = "camera_triage"
+local LOG = (os.getenv("TEMP") or os.getenv("TMP") or ".") .. "\\camera_triage_resolve.log"
+local say = print
+
+-- console + log file: if a menu script's output does not reach the Console, the log still has it
+local function log_say(text)
+    print(text)
+    local f = io.open(LOG, "ab")
+    if f then
+        f:write(os.date("%Y-%m-%d %H:%M:%S  "), tostring(text), "\r\n")
+        f:close()
+    end
+end
 
 local function list(t)
     -- Resolve returns lists as tables {[1] = a, [2] = b, ...}
@@ -69,10 +81,10 @@ local function ask_python(tools, python, request_lines)
     local p = io.popen(cmd)
     local output = p and p:read("*a") or ""
     if p then p:close() end
-    if output:match("%S") then print(output) end
+    if output:match("%S") then say(output) end
     local result = io.open(answer, "rb")
     if not result then
-        print("camera_triage: no answer from " .. python .. " — is the Python path in the menu script right?")
+        say("camera_triage: no answer from " .. python .. " — is the Python path in the menu script right?")
         return nil
     end
     local lines = {}
@@ -85,7 +97,7 @@ end
 
 function M.run(resolve, mode, tools, python)
     local project = resolve:GetProjectManager():GetCurrentProject()
-    if not project then print("camera_triage: no project is open"); return end
+    if not project then say("camera_triage: no project is open"); return end
     local timeline = project:GetCurrentTimeline()
     local pool = media_pool_clips(project:GetMediaPool():GetRootFolder())
 
@@ -97,13 +109,13 @@ function M.run(resolve, mode, tools, python)
                 if item:GetMediaPoolItem() then removed = removed + clear(item) end   -- not titles, generators
             end
         end
-        print("camera_triage: removed " .. removed .. " marker(s) added by this script")
+        say("camera_triage: removed " .. removed .. " marker(s) added by this script")
         return
     end
 
     local targets, where = {}, nil
     if mode == "timeline" then
-        if not timeline then print("camera_triage: no timeline is open"); return end
+        if not timeline then say("camera_triage: no timeline is open"); return end
         for _, item in ipairs(timeline_items(timeline)) do
             local mp = item:GetMediaPoolItem()
             if mp then targets[#targets + 1] = { item = item, mp = mp } end   -- not titles, generators
@@ -113,7 +125,7 @@ function M.run(resolve, mode, tools, python)
         for _, clip in ipairs(pool) do targets[#targets + 1] = { item = clip, mp = clip } end
         where = "Media Pool"
     end
-    if #targets == 0 then print("camera_triage: " .. where .. " has no clips"); return end
+    if #targets == 0 then say("camera_triage: " .. where .. " has no clips"); return end
 
     local request = {}
     for i, t in ipairs(targets) do
@@ -141,15 +153,32 @@ function M.run(resolve, mode, tools, python)
             end
         end
     end
-    print("camera_triage: " .. where .. " — " .. done .. " clip(s) marked, " .. markers .. " marker(s)"
+    say("camera_triage: " .. where .. " — " .. done .. " clip(s) marked, " .. markers .. " marker(s)"
         .. (failed > 0 and (", " .. failed .. " not accepted by Resolve") or ""))
     if #skipped > 0 then
         table.sort(skipped)
         local shown = {}
         for i = 1, math.min(10, #skipped) do shown[i] = skipped[i] end
-        print("  without markup (" .. #skipped .. "): " .. table.concat(shown, ", ")
+        say("  without markup (" .. #skipped .. "): " .. table.concat(shown, ", ")
             .. (#skipped > 10 and (" and " .. (#skipped - 10) .. " more") or ""))
     end
+end
+
+-- Entry point of the menu launchers: finds the Resolve object, logs every step and any error.
+function M.main(mode, tools, python)
+    say = log_say
+    say("camera_triage: start " .. tostring(mode) .. "  (resolve=" .. type(resolve) .. ", Resolve()="
+        .. type(Resolve) .. ", bmd=" .. type(bmd) .. ", io.popen=" .. type(io and io.popen) .. ")")
+    local app = resolve
+    if app == nil and type(Resolve) == "function" then app = Resolve() end
+    if app == nil and type(bmd) == "table" and bmd.scriptapp then app = bmd.scriptapp("Resolve") end
+    if app == nil then
+        say("camera_triage: no Resolve object — the script cannot reach Resolve")
+        return
+    end
+    local ok, err = xpcall(function() M.run(app, mode, tools, python) end, debug.traceback)
+    if not ok then say("camera_triage: ERROR " .. tostring(err)) end
+    say("camera_triage: end")
 end
 
 return M
