@@ -43,6 +43,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import triage_plan as tp                    # noqa: E402  shared _triage.csv reading
 
 VIDEO_EXTS = {".mp4", ".mov"}
+
+
+def is_video(name):
+    """MP4/MOV, but not hidden files: "._NAME.MP4" is macOS metadata (AppleDouble, a few KB)
+    that a Mac leaves next to every file copied to an exFAT/FAT drive — not a video."""
+    return Path(name).suffix.lower() in VIDEO_EXTS and not name.startswith(".")
 # label order as on the keyboard in camera_triage.lua (shared list in triage_plan);
 # labels missing from it (old, renamed) get columns at the end — see main
 LABELS = list(tp.LABELS)
@@ -120,7 +126,7 @@ def scan(roots, skip):
             here = Path(dirpath).resolve()
             if tp.CSV_NAME in filenames:
                 found[here] = here / tp.CSV_NAME
-            elif any(Path(f).suffix.lower() in VIDEO_EXTS for f in filenames):
+            elif any(is_video(f) for f in filenames):
                 found.setdefault(here, None)
     return found
 
@@ -179,7 +185,7 @@ def read_folder(folder, csv_path, args):
 
     # videos on disk that are not in the markup (proxies are not separate videos)
     for p in sorted(folder.iterdir()):
-        if p.is_file() and p.suffix.lower() in VIDEO_EXTS and p.name.upper() not in files:
+        if p.is_file() and is_video(p.name) and p.name.upper() not in files:
             files[p.name.upper()] = new_file(p.name)
     for f in files.values():
         src, is_proxy = tp.find_source(folder, f["file"])

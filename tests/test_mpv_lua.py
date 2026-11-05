@@ -23,6 +23,8 @@ class MpvLuaTest(unittest.TestCase):
         folder.mkdir()
         for name in ("GX010123", "GX010124", "GX020123", "DJI_0001"):
             make_video(folder / f"{name}.MP4", 15)
+        # macOS metadata next to a file copied from a Mac (AppleDouble): first in the list, not a video
+        (folder / "._DJI_0001.MP4").write_bytes(b"x" * 4096)
         cls.csv = triage_csv(folder, [row("mark", "GX010123.MP4", 5, label="fish",
                                           at="2026-10-01 10:00:00")])
         (base / "watch_later").mkdir()

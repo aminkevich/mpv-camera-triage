@@ -74,7 +74,7 @@ The activity (spearfishing / kitesurfing / other) is written to every row and ch
 
 ## Archive report (`tools/make_report.py`)
 
-- Walk: all subfolders except `Clips` (`--skip`). A folder goes into the report if it has a `_triage.csv` or videos (MP4/MOV; LRV/LRF proxies do not count as separate videos).
+- Walk: all subfolders except `Clips` (`--skip`). A folder goes into the report if it has a `_triage.csv` or videos (MP4/MOV; LRV/LRF proxies do not count as separate videos, and neither do hidden files such as `._NAME.MP4` — macOS metadata a Mac leaves next to files copied to an exFAT/FAT drive).
 - Video status: `reviewed` — has `file_done`; `rated, no Enter` — only `file_partial`; `started` — has marks or notes but no rating; `not opened` — the video is on disk but not in the markup.
 - The rating is the last `file_done`, as for cutting. `rating_draft` is a rating from a `file_partial` made after it (re-rating without Enter).
 - Folder status: `complete` (all videos reviewed), `partial (N of M)`, `not marked up` (no `_triage.csv`), `CSV in another format` (re-saved in a spreadsheet — cannot be read).

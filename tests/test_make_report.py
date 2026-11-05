@@ -33,6 +33,8 @@ class ReportTest(unittest.TestCase):
         video(turkey / "GX010001.MP4", 1000)
         video(turkey / "GX010002.MP4", 2000)
         video(turkey / "GX010003.MP4", 3000)                       # never opened
+        video(turkey / "._GX010003.MP4", 4096)                     # macOS metadata, not a video
+        video(root / "MacOnly" / "._DJI_0009.MP4", 4096)            # a folder of Mac leftovers only
         video(turkey / "Clips" / "GX010001_00-00-05_10s_fish.mp4", 10)   # not an archive video
         rows = [row("mark", "GX010001.MP4", 10, label="fish"), row("clip", "GX010001.MP4", 30, 45, label="dive"),
                 row("note", "GX010001.MP4", note="murky"),
@@ -99,6 +101,10 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(self.folders["Other"]["status"], "not marked up")
         self.assertEqual(self.folders["Broken"]["status"], "CSV in another format")
         self.assertIn("Broken", self.res.stdout)
+
+    def test_mac_metadata_files_are_not_videos(self):
+        self.assertNotIn("MacOnly", self.folders)
+        self.assertFalse([k for k in self.files if k[1].startswith("._")])
 
     def test_total_counts_each_video_once(self):
         total = self.folders["TOTAL"]

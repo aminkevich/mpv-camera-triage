@@ -849,14 +849,16 @@ end
 
 ---------------------------------------------------------------- playlist / file events
 
--- What to do with a playlist entry: "junk" (not a video / a proxy whose original is also in the list),
--- "done" (already reviewed), nil (keep).
+-- What to do with a playlist entry: "junk" (not a video / a hidden file / a proxy whose original is
+-- also in the list), "done" (already reviewed), nil (keep).
 -- in_list — set of full playlist paths (upper case).
 local function entry_kind(p, in_list)
     local path, dir, fname, ext = split(p)
     local info = utils.file_info(path)
     if not info or info.is_dir then return nil end          -- mpv expands folders itself
     if skip_set[ext] then return "junk" end
+    -- hidden files: "._NAME.MP4" is macOS metadata (AppleDouble) next to files copied from a Mac
+    if fname:sub(1, 1) == "." then return "junk" end
     if PROXY_EXT[ext] then
         local main = utils.join_path(dir, main_file_for(dir, fname))
         if in_list[main:upper()] then return "junk" end
