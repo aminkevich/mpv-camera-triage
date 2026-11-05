@@ -69,5 +69,60 @@ class MpvLuaTest(unittest.TestCase):
         self.assertEqual(playing, ["PLAYING GX010123.MP4", "PLAYING GX020123.MP4"])
 
 
+def run_mpv(base, folder, driver, csv):
+    """mpv with camera_triage.lua and a driver script → (process, lines logged by the driver)."""
+    (base / "watch_later").mkdir(exist_ok=True)
+    log = base / f"{driver.stem}.log"
+    cmd = [MPV, "--no-config", "--pause", "--vo=null", "--ao=null", "--really-quiet",
+           f"--log-file={log}", f"--watch-later-dir={base / 'watch_later'}",
+           f"--script={LUA}", f"--script={driver}", f"--script-opts=driver-csv={csv}", str(folder)]
+    proc = subprocess.run(cmd, capture_output=True, timeout=90)
+    lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    tag = re.escape(f"[{driver.stem}]")
+    return proc, [m.group(1) for m in (re.search(tag + r" (.*)$", ln) for ln in lines) if m]
+
+
+@unittest.skipUnless(MPV and FFMPEG, "requires mpv and ffmpeg")
+class ClipUndoAndSubfoldersTest(unittest.TestCase):
+    """u inside an open clip undoes the latest mark, not the clip start; subfolders are in the
+    playlist right away, after the folder's own files, and GoPro chapters are reordered only
+    within their own folder."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        base = Path(cls.tmp.name)
+        trip = base / "Trip"
+        for rel in ("DJI_0001.MP4", "GX010001.MP4", "GX010003.MP4", "GX020001.MP4",
+                    "Day2/GX010002.MP4", "Day2/DJI_0005.MP4", "Mid/GX010007.MP4"):
+            (trip / rel).parent.mkdir(parents=True, exist_ok=True)
+            make_video(trip / rel, 6)
+        cls.proc, cls.log = run_mpv(base, trip, Path(__file__).with_name("mpv_driver_clip_folders.lua"),
+                                    trip / "_triage.csv")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def csv_at(self, tag):
+        rows = [ln[len(f"CSV {tag} "):].split(";") for ln in self.log
+                if ln.startswith(f"CSV {tag} ") and not ln.endswith(" END")]
+        return [(r[1], r[7], r[8]) for r in rows]          # event, time_hms, label
+
+    def test_u_undoes_the_latest_mark_inside_an_open_clip(self):
+        self.assertEqual(self.proc.returncode, 0)
+        self.assertEqual(self.csv_at("after_undo"), [("mark", "00:00:02", "fish")])
+        # the clip stayed open and takes its label from the mark that is left
+        self.assertEqual(self.csv_at("after_close"),
+                         [("mark", "00:00:02", "fish"), ("clip", "00:00:01", "fish")])
+
+    def test_subfolders_follow_the_folder_and_keep_their_place(self):
+        order = ["DJI_0001.MP4", "GX010001.MP4", "GX020001.MP4", "GX010003.MP4",
+                 "Day2/DJI_0005.MP4", "Day2/GX010002.MP4", "Mid/GX010007.MP4"]
+        self.assertIn("PLAYLIST " + ",".join(order), self.log)
+        playing = [ln[len("PLAYING "):] for ln in self.log if ln.startswith("PLAYING ")]
+        self.assertEqual(playing, order)                    # > walks every file once, in order
+
+
 if __name__ == "__main__":
     unittest.main()

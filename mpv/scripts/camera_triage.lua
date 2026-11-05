@@ -1,5 +1,5 @@
 -- camera_triage.lua — fast manual triage of action-camera footage in mpv
--- Version 3.4. Requires mpv 0.38 or newer.
+-- Version 3.5. Requires mpv 0.38 or newer.
 -- Works with any video. Understands low-resolution proxies: GoPro .LRV and DJI .LRF
 -- (you can watch them instead of the heavy MP4s), and GoPro chapter names (GX01…).
 --
@@ -17,10 +17,13 @@
 --   0 1 2 3     file rating (0 junk … 3 top)
 --   ENTER       file reviewed → write the rating → next UNreviewed file
 --               (an open clip is closed at the current position)
---   u           undo: an open clip (i) right away; a CSV row after confirmation (u again)
+--   u           undo the latest action: an open clip start (i) right away; a CSV row after
+--               confirmation (u again). Marks placed inside an open clip are undone first,
+--               the clip start after them
 --   Del         delete the nearest mark / clip / note (±3 s), including ones from earlier sessions;
 --               after confirmation (Del again). u brings the deleted row back
 --   Chapters of one GoPro recording (GX01…, GX02…) follow each other in the playlist (gopro_order)
+--   Subfolders of an opened folder go into the playlist after its own files (subfolders)
 --   + -         speed ×2 / ÷2          TAB  1x ↔ fast         BACKSPACE  1x
 --   PgUp PgDn   jump to the previous / next mark (marks are shown as ticks on the seek bar)
 --   a           change activity (remembered in the folder's CSV)   F1 help   F11 full screen
@@ -57,8 +60,12 @@ local o = {
     show_marks  = true,    -- earlier marks pop up during playback
     sort_on_exit = true,   -- sort the CSV by file and time on exit
     gopro_order = true,    -- chapters of one GoPro recording (GX01…, GX02…) follow each other in the playlist
+    subfolders  = "recursive",  -- recursive | lazy | ignore | "" (mpv's own directory-mode)
 }
 options.read_options(o, "camera_triage")
+-- Subfolders of an opened folder: recursive — all their videos are in the playlist right away
+-- (after the folder's own files), so "reviewed N of M" and "next unreviewed" see everything.
+if o.subfolders ~= "" then mp.set_property("directory-mode", o.subfolders) end
 local use_proxy = o.prefer_proxy or o.prefer_lrv     -- current mode; the L key toggles it
 local PROXY_EXT = { lrv = true, lrf = true }
 
@@ -97,7 +104,9 @@ local activity_dir = nil   -- folder for which the activity has already been cho
 local undone_note = nil    -- text of the last undone note (prefilled into the next one)
 local cur = nil        -- current file
 local index = {}       -- [dir] = { done, rating, marks (count), points (list) }; key is the MP4 name in upper case
-local written = {}     -- stack of this session's writes for undo: { path = ..., dir = ... }
+local written = {}     -- stack of this session's writes for undo: { path = ..., dir = ..., seq = ... }
+local seq = 0          -- action counter: u undoes the latest of a CSV write and an open clip start
+local function next_seq() seq = seq + 1; return seq end
 local touched = {}     -- CSVs written in this session (sorted on exit)
 
 ---------------------------------------------------------------- helpers
@@ -330,7 +339,7 @@ local function append_row(fields)
     local line = table.concat(out, ";")
     f:write(line .. "\n")
     f:close()
-    written[#written + 1] = { path = path, dir = cur.dir, line = line }
+    written[#written + 1] = { path = path, dir = cur.dir, line = line, seq = next_seq() }
     touched[path] = true
     return true
 end
@@ -519,8 +528,13 @@ local function add_mark(label)
     if not t then return end
     local row = base_row("mark", true)
     row.time_ms, row.time_hms, row.label = ms(t), hms(t), label
+    local prev_label = cur.in_label
     if append_row(row) then
-        if cur.in_t then cur.in_label = label end
+        if cur.in_t then
+            -- undoing this mark must give the open clip its previous label back
+            written[#written].clip_label = { in_seq = cur.in_seq, prev = prev_label }
+            cur.in_label = label
+        end
         reload_marks()
         osd("● " .. label .. "  @ " .. hms(t))
     end
@@ -530,7 +544,7 @@ local function set_in()
     if not need_file() then return end
     local t = mark_time()
     if not t then return end
-    cur.in_t, cur.in_label = t, nil
+    cur.in_t, cur.in_label, cur.in_seq = t, nil, next_seq()
     osd("▶ IN  " .. hms(t) .. "     o — clip end,  u — cancel")
 end
 
@@ -640,13 +654,14 @@ end
 
 local undo_armed = nil      -- { line, at }: waiting for undo confirmation
 local function undo()
-    if cur and cur.in_t then
+    local last_w = written[#written]
+    -- strictly the latest action first: marks placed inside an open clip are undone before its start
+    if cur and cur.in_t and not (last_w and last_w.seq > cur.in_seq) then
         local t = cur.in_t
         cur.in_t, cur.in_label = nil, nil
         osd("↶ Clip start " .. hms(t) .. " cancelled")
         return
     end
-    local last_w = written[#written]
     if not last_w then osd("Nothing to undo (in this session)"); return end
     local last = last_w.line
     local r = parse_csv_line(last)
@@ -675,6 +690,8 @@ local function undo()
     if ok == nil then osd("⚠ Cannot write the CSV: " .. err, 5); return end
     table.remove(written)
     if not ok then osd("⚠ Not undone: " .. err, 5); return end
+    local cl = last_w.clip_label
+    if cl and cur and cur.in_t and cur.in_seq == cl.in_seq then cur.in_label = cl.prev end
     load_index(last_w.dir, true)
     if cur and cur.dir == last_w.dir then
         update_chapters()
@@ -727,9 +744,18 @@ local function delete_near()
         local w = written[i]
         if not w.deleted and w.path == cur.csv and w.line == best.line then table.remove(written, i); break end
     end
-    written[#written + 1] = { path = cur.csv, dir = cur.dir, line = best.line, deleted = true }
+    written[#written + 1] = { path = cur.csv, dir = cur.dir, line = best.line, deleted = true, seq = next_seq() }
     touched[cur.csv] = true
     reload_marks()
+    if cur.in_t and best.ev == "mark" and best.label == cur.in_label then
+        -- the open clip took its label from this mark: take it from the latest mark left after i
+        cur.in_label = nil
+        local latest = nil
+        for _, p in ipairs(index[cur.dir].points[cur.key] or {}) do
+            if p.ev == "mark" and p.t >= cur.in_t and (not latest or p.t >= latest.t) then latest = p end
+        end
+        if latest then cur.in_label = latest.label end
+    end
     osd("✕ Deleted: " .. what .. "     u — restore")
 end
 
@@ -846,24 +872,30 @@ local function playlist_sig(pl)
 end
 
 -- GoPro chapters in recording order: mpv sorts by name (GX010123, GX010124, …, GX020123),
--- and the continuation of a recording ends up at the end. Only GoPro files are moved, into the
--- slots they already occupy; other files stay put. true — the order changed.
+-- and the continuation of a recording ends up at the end. Only GoPro files are moved, and only
+-- within their own folder, into the slots that folder's GoPro files already occupy: other files
+-- and other folders (subfolders) stay where they are. true — the order changed.
 local function reorder_gopro()
     local pl = mp.get_property_native("playlist") or {}
-    local slots, items = {}, {}
+    local groups, order = {}, {}       -- folder → { slots, items }
     for i, e in ipairs(pl) do
         local _, dir, fname = split(e.filename)
         local k = gopro_key(fname)
         if k then
-            slots[#slots + 1] = i
-            items[#items + 1] = { f = e.filename, k = dir:upper() .. "|" .. k }
+            local d = dir:upper()
+            local g = groups[d]
+            if not g then g = { slots = {}, items = {} }; groups[d] = g; order[#order + 1] = d end
+            g.slots[#g.slots + 1] = i
+            g.items[#g.items + 1] = { f = e.filename, k = k }
         end
     end
-    if #items < 2 then return false end
-    table.sort(items, function(a, b) return a.k < b.k end)
     local want, have = {}, {}
     for i, e in ipairs(pl) do want[i], have[i] = e.filename, e.filename end
-    for j, i in ipairs(slots) do want[i] = items[j].f end
+    for _, d in ipairs(order) do
+        local g = groups[d]
+        table.sort(g.items, function(a, b) return a.k < b.k end)
+        for j, i in ipairs(g.slots) do want[i] = g.items[j].f end
+    end
     local moved = false
     for i = 1, #want do
         if have[i] ~= want[i] then
@@ -1162,4 +1194,4 @@ bind("L", "proxy-toggle", toggle_proxy)
 bind("F1", "help", function() help_on = not help_on; refresh_ui() end)
 bind("F11", "fullscreen", function() mp.command("cycle fullscreen") end)
 
-mp.msg.info("camera_triage v3.4: CSV = <video folder>/" .. o.csv_name)
+mp.msg.info("camera_triage v3.5: CSV = <video folder>/" .. o.csv_name)

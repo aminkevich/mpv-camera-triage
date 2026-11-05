@@ -52,7 +52,7 @@ install.ps1                       installs into %APPDATA%\mpv (Windows)
 
 ## Usage
 
-Drag a folder of videos into the mpv window. The first unreviewed file opens; the status is shown in the top right corner.
+Drag a folder of videos into the mpv window. The first unreviewed file opens; the status is shown in the top right corner. Subfolders (e.g. one per day) come after the folder's own files, each with its own `_triage.csv`.
 
 | Keys | Action |
 |---|---|
@@ -63,7 +63,7 @@ Drag a folder of videos into the mpv window. The first unreviewed file opens; th
 | `n` / `N` | note at the moment / for the file |
 | `0`–`3` | file rating |
 | `Enter` | file reviewed → next unreviewed one |
-| `u` | undo (a CSV row after a second `u`) |
+| `u` | undo the latest action (a CSV row after a second `u`); inside an open clip — its marks first, then its start |
 | `Del` | delete a nearby mark / clip / note (±3 s), also from earlier sessions — after a second `Del`; `u` brings it back |
 | `+` `-` `Tab` `Backspace` | speed ×2 / ÷2 / 1x↔fast / 1x |
 | `PgUp` `PgDn` | previous / next mark |
@@ -140,7 +140,7 @@ About 10 seconds, nothing to install (standard `unittest`). What is checked:
 | `test_make_report.py` | video and folder statuses, copies in a project and an export, TOTAL without duplicates, `--probe` keeps known values |
 | `test_labels.py` | the label list in `camera_triage.lua` (keys, F1 help) matches `triage_plan.py` (report, Resolve colors) |
 | `test_integration.py` | all three tools on real tiny videos (requires ffmpeg) |
-| `test_mpv_lua.py` | `camera_triage.lua` in a windowless mpv: chapter order, `Del`, `u`, a mark, rating + Enter, CSV sorting (requires mpv and ffmpeg; mpv is looked up in PATH, in `C:\Program Files\MPV Player` or via the `MPV` variable) |
+| `test_mpv_lua.py` | `camera_triage.lua` in a windowless mpv: chapter order, `Del`, `u` (also inside an open clip), a mark, rating + Enter, CSV sorting, subfolder order (requires mpv and ffmpeg; mpv is looked up in PATH, in `C:\Program Files\MPV Player` or via the `MPV` variable) |
 
 Without ffmpeg or mpv the corresponding tests are skipped (`skipped`), the rest still run.
 
