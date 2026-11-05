@@ -23,7 +23,7 @@ tools/
   make_timeline.py                FCPXML timeline for editing (DaVinci Resolve) from _triage.csv
   make_clips.py                   cuts clips from _triage.csv with ffmpeg
   make_report.py                  archive summary report from every _triage.csv
-  resolve_markers.py              markers on clips in DaVinci Resolve (Workspace → Scripts)
+  resolve_markers.lua / .py       markers on clips in DaVinci Resolve (Workspace → Scripts)
   triage_plan.py                  shared segment plan for both scripts
   make_clips.conf                 settings for both: pads (global and per label) etc.
 docs/
@@ -96,7 +96,7 @@ Timeline markers from the `.edl` stay where they are on the timeline: once you m
 | `camera_triage - media pool markers` | puts it on every clip in the Media Pool: clips you add to a timeline later come with their markers |
 | `camera_triage - remove markers` | removes the markers the script added (yours stay) |
 
-For each clip the script reads `_triage.csv` next to its file. The markers are the same as in the `.edl`, with the same colors: labels, `i`/`o` clips with their duration, notes. Running it again after changing the markup replaces the script's markers. The report is in **Workspace → Console**. The script runs from the repository folder, so after moving the folder run `install.ps1` again.
+For each clip the script reads `_triage.csv` next to its file. The markers are the same as in the `.edl`, with the same colors: labels, `i`/`o` clips with their duration, notes. Running it again after changing the markup replaces the script's markers. The report is in **Workspace → Console**. The menu entries are small Lua scripts (the free Resolve lists only Lua scripts there); the markers are computed by `resolve_markers.py` with the Python bundled with Resolve. They run from the repository folder, so after moving the folder run `install.ps1` again, and restart Resolve after installing: it reads the menu on startup.
 
 The segments link to the original videos, so their edges can be dragged out to the start and end of the file: the pads only set the initial width. `--full` additionally writes `_full.fcpxml` and `_full.edl` — every marked file in full with all its markup as markers. The segment plan is the same as for cutting: the same options and `make_clips.conf`.
 
@@ -152,7 +152,7 @@ About 10 seconds, nothing to install (standard `unittest`). What is checked:
 | `test_make_timeline.py` | timecodes (including drop frame), FCPXML: segments back to back and on frame boundaries, markers inside; the EDL matches the FCPXML |
 | `test_make_report.py` | video and folder statuses, copies in a project and an export, TOTAL without duplicates, `--probe` keeps known values |
 | `test_labels.py` | the label list in `camera_triage.lua` (keys, F1 help) matches `triage_plan.py` (report, Resolve colors) |
-| `test_resolve_markers.py` | markers on clips against a fake Resolve: frames, colors, durations, reruns, proxies, remove |
+| `test_resolve_markers.py` | markers on clips against a fake Resolve: frames, colors, durations, reruns, proxies, remove; the Lua part in Resolve's own Lua (`fuscript`, if Resolve is installed) |
 | `test_integration.py` | all three tools on real tiny videos (requires ffmpeg) |
 | `test_mpv_lua.py` | `camera_triage.lua` in a windowless mpv: chapter order, `Del`, `u` (also inside an open clip), a mark, rating + Enter, CSV sorting, subfolder order (requires mpv and ffmpeg; mpv is looked up in PATH, in `C:\Program Files\MPV Player` or via the `MPV` variable) |
 

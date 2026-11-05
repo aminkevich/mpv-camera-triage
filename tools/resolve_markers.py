@@ -7,8 +7,10 @@ they move with it, stay on their frame when it is trimmed and disappear with it.
 times in _triage.csv are counted from the start of the video file, which is exactly how Resolve
 counts clip markers.
 
-Run inside Resolve: Workspace → Scripts → camera_triage … (install.ps1 adds the menu entries;
-the free version of Resolve runs them too). Output goes to Workspace → Console.
+Run inside Resolve: Workspace → Scripts → camera_triage … (install.ps1 adds the menu entries).
+The free Resolve lists only Lua scripts in that menu, so the entries run resolve_markers.lua:
+it collects the clips in Resolve, asks this script for their markers (--plan, with the Python
+bundled with Resolve) and puts them on the clips. Output goes to Workspace → Console.
   timeline markers  — every clip of the current timeline (all video tracks)
   media pool        — every clip in the Media Pool: clips you put on a timeline later come
                       with their markers
@@ -182,7 +184,45 @@ def run(resolve, mode):
               + (f" and {len(names) - 10} more" if len(names) > 10 else ""))
 
 
+# ---------------------------------------------------------------- for resolve_markers.lua
+
+def clean(text):
+    return re.sub(r"[\t\r\n]+", " ", text or "").strip()
+
+
+def plan_file(request, answer):
+    """The free Resolve runs only Lua scripts from its menu, so resolve_markers.lua asks this
+    script for the markers. request: lines "id<TAB>file path<TAB>fps<TAB>frames" (UTF-8).
+    answer: "id<TAB>MARKUP" for a clip with markup (then its markers: "id<TAB>frame<TAB>duration
+    <TAB>color<TAB>name<TAB>note"), or "id<TAB>NONE" for a clip without markup."""
+    cache, out = {}, []
+    for line in Path(request).read_text(encoding="utf-8-sig").splitlines():
+        if not line.strip():
+            continue
+        item_id, path, fps, frames = (line.split("\t") + ["", "", "", ""])[:4]
+        d = markup_for(path, cache) if path else None
+        try:
+            fps = exact_fps(fps) if d else None
+        except ValueError:
+            fps = None
+        if not d or not fps:
+            out.append(f"{item_id}\tNONE")
+            continue
+        try:
+            frames = int(float(frames)) or None
+        except ValueError:
+            frames = None
+        out.append(f"{item_id}\tMARKUP")
+        for f, length, color, name, note in plan_markers(d, fps, frames):
+            out.append("\t".join([item_id, str(f), str(length), color, clean(name), clean(note)]))
+    Path(answer).write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
 if __name__ == "__main__":
-    # External run (Resolve Studio with external scripting enabled): py resolve_markers.py timeline
-    import DaVinciResolveScript as dvr_script
-    run(dvr_script.scriptapp("Resolve"), sys.argv[1] if len(sys.argv) > 1 else "timeline")
+    tp.setup_console()
+    if len(sys.argv) == 4 and sys.argv[1] == "--plan":
+        plan_file(sys.argv[2], sys.argv[3])         # called by resolve_markers.lua
+    else:
+        # External run (Resolve Studio with external scripting enabled): py resolve_markers.py timeline
+        import DaVinciResolveScript as dvr_script
+        run(dvr_script.scriptapp("Resolve"), sys.argv[1] if len(sys.argv) > 1 else "timeline")
