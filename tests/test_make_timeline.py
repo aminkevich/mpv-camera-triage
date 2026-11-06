@@ -1,4 +1,6 @@
-"""make_timeline.py without ffprobe: timecodes, FCPXML (frames, joins, markers) and the marker EDL."""
+"""make_timeline.py without ffprobe: timecodes, the OTIO timeline with clip markers, FCPXML (frames,
+joins, markers) and the marker EDL."""
+import json
 import re
 import tempfile
 import unittest
@@ -159,6 +161,76 @@ class TimelineTest(unittest.TestCase):
         values = [m.get("value") for m in root.iter("marker")]
         self.assertIn("✎ file: Murky water", values)
         self.assertEqual(positions, self.edl_positions(path.with_suffix(".edl")))
+
+    # ---------------------------------------------------------------- OpenTimelineIO
+
+    def build_otio(self, full=False):
+        path = self.folder / ("_full.otio" if full else "_selects.otio")
+        n, total, nm = mt.build_otio(self.items(full), "Full" if full else "Selects", self.folder, path, full)
+        return json.loads(path.read_text(encoding="utf-8")), n, nm
+
+    def check_otio(self, tl):
+        """Clips inside their source, clip markers inside their clip, in the source's own time;
+        the audio track in step with the video; the timeline starts at 01:00:00:00."""
+        self.assertEqual(tl["OTIO_SCHEMA"], "Timeline.1")
+        start = tl["global_start_time"]
+        self.assertEqual(start["value"] / start["rate"], 3600 * 60 / float(NTSC60))
+        tracks = tl["tracks"]["children"]
+        video = tracks[0]["children"]
+        for clip in video:
+            sr = clip["source_range"]
+            ar = clip["media_references"]["DEFAULT_MEDIA"]["available_range"]
+            s0, dur = sr["start_time"]["value"], sr["duration"]["value"]
+            self.assertGreaterEqual(s0, ar["start_time"]["value"])
+            self.assertLessEqual(s0 + dur, ar["start_time"]["value"] + ar["duration"]["value"])
+            for m in clip["markers"]:
+                mr = m["marked_range"]
+                self.assertEqual(mr["start_time"]["rate"], sr["start_time"]["rate"])
+                self.assertTrue(s0 <= mr["start_time"]["value"] < s0 + dur, m["name"])
+                self.assertLessEqual(mr["start_time"]["value"] + mr["duration"]["value"], s0 + dur)
+        if len(tracks) > 1:
+            self.assertEqual(tracks[1]["kind"], "Audio")
+            self.assertEqual([c["source_range"]["duration"] for c in tracks[1]["children"]],
+                             [c["source_range"]["duration"] for c in video])
+        return video
+
+    def test_otio_selects_with_clip_markers(self):
+        tl, n, nm = self.build_otio()
+        self.assertEqual(tl["name"], "Selects Turkey")
+        video = self.check_otio(tl)
+        self.assertEqual([c["name"] for c in video], ["GX010123 00:00:05 fish+shot ★3", "GX010123 00:00:29 dive ★3",
+                                                     "DJI_0001 00:00:33 jump ★2"])
+        self.assertEqual((n, nm), (3, 6))
+        gx = video[0]
+        tc0 = mt.tc_frames("10:20:30:15", NTSC60)
+        self.assertEqual(gx["source_range"]["start_time"]["value"], tc0 + round(5 * NTSC60))
+        self.assertEqual(gx["media_references"]["DEFAULT_MEDIA"]["target_url"],
+                         (self.folder / "GX010123.MP4").resolve().as_uri())
+        # markers in the source's own time (its timecode): Resolve reads them so
+        fish = gx["markers"][0]
+        self.assertEqual((fish["name"], fish["color"]), ("fish", "BLUE"))
+        self.assertEqual(fish["marked_range"]["start_time"]["value"], tc0 + round(10 * NTSC60))
+        self.assertEqual([m["name"] for c in video for m in c["markers"]],
+                         ["fish", "✎ Moray; «big one»", "shot", "clip dive", "bad", "jump"])
+        note = gx["markers"][1]
+        self.assertEqual((note["color"], note["comment"]), ("WHITE", "Moray; «big one»"))
+        dive = video[1]["markers"][0]
+        self.assertEqual((dive["color"], dive["marked_range"]["duration"]["value"]), ("CYAN", round(15 * NTSC60)))
+        dji = video[2]
+        self.assertEqual(dji["source_range"]["start_time"]["rate"], 30.0)   # each clip in its own rate
+
+    def test_otio_full_has_file_notes(self):
+        tl, n, nm = self.build_otio(full=True)
+        video = self.check_otio(tl)
+        self.assertEqual(n, 2)
+        self.assertIn("✎ file: Murky water", [m["name"] for m in video[0]["markers"]])
+
+    def test_otio_audio_gap_for_a_silent_source(self):
+        self.infos["DJI_0001.MP4"]["audio"] = None
+        tl, _, _ = self.build_otio()
+        audio = tl["tracks"]["children"][1]["children"]
+        self.assertEqual([c["OTIO_SCHEMA"] for c in audio], ["Clip.2", "Clip.2", "Gap.1"])
+        self.check_otio(tl)
 
 
 if __name__ == "__main__":

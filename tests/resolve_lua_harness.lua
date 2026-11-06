@@ -56,7 +56,7 @@ local timeline = {
 }
 local day2 = { GetClipList = function() return resolve_list(proxy) end,
                GetSubFolderList = function() return resolve_list() end }
-local root = { GetClipList = function() return resolve_list(gopro) end,
+local root = { GetClipList = function() return resolve_list(gopro, other) end,
                GetSubFolderList = function() return resolve_list(day2) end }
 local project = { GetCurrentTimeline = function() return timeline end,
                   GetMediaPool = function() return { GetRootFolder = function() return root end } end }

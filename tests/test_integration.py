@@ -69,8 +69,20 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual([p.name for p in out.glob("*.mp4")], ["GX020123_00-00-00_7s_catch.mp4"])
         self.assertTrue((out / "_clips.csv").exists())
 
-    def test_make_timeline_uses_source_timecode(self):
+    def test_make_timeline_otio_by_default(self):
         res = run_tool("make_timeline.py", self.folder, "--config", self.conf, "--full")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("DaVinci Resolve not found", res.stdout)       # run_tool: no Resolve menu
+        tl = json.loads((self.folder / "_selects.otio").read_text(encoding="utf-8"))
+        clips = {c["media_references"]["DEFAULT_MEDIA"]["name"]: c for c in tl["tracks"]["children"][0]["children"]}
+        gx = clips["GX010123.MP4"]["media_references"]["DEFAULT_MEDIA"]["available_range"]["start_time"]
+        self.assertEqual(gx["value"], (10 * 3600 + 20 * 60 + 30) * 60 + 15)   # the source timecode
+        self.assertEqual(sum(len(c["markers"]) for c in clips.values()), 4)
+        self.assertEqual([t["kind"] for t in tl["tracks"]["children"]], ["Video", "Audio"])
+        self.assertTrue((self.folder / "_full.otio").exists())
+
+    def test_make_timeline_fcpxml_uses_source_timecode(self):
+        res = run_tool("make_timeline.py", self.folder, "--config", self.conf, "--full", "--fcpxml")
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         root = ET.parse(self.folder / "_selects.fcpxml").getroot()
         assets = {a.get("name"): a for a in root.iter("asset")}

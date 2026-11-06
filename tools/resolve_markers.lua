@@ -4,16 +4,15 @@
 -- programs. So tools/resolve_markers.py reads _triage.csv itself and writes the menu scripts
 -- (Workspace → Scripts → camera_triage - …) as: the marker data, then this file, then one call.
 -- This file must therefore use only plain Lua and the Resolve API.
+-- Modes: "mediapool" — markers on every Media Pool clip with markup (timelines from
+-- make_timeline.py bring their clip markers themselves); "remove" — remove this script's markers
+-- from the Media Pool clips and from the clips of the current timeline.
 --
 -- DATA: [file path in upper case, "\" separators] = { {t, duration, color, name, note}, ... } —
 -- times in seconds from the start of the file, sorted; duration 0 = a point marker.
 
 local M = {}
 local TAG = "camera_triage"       -- customData of our markers: a rerun replaces them, remove deletes them
-
--- Clip markers on timeline clips count frames from the start of the source file (as in the Media
--- Pool); "item" would count from the first frame used on the timeline instead.
-M.TIMELINE_FRAMES = "source"
 
 local function list(t)
     -- Resolve returns lists as tables {[1] = a, [2] = b, ...}, which may also hold other fields
@@ -88,18 +87,16 @@ function M.plan(markers, fps, frames)
     return out
 end
 
--- put the markers of mp_item's file on item (the clip itself or a timeline clip using it)
-local function mark(item, mp_item, data)
-    local markers = data[M.key(mp_item:GetClipProperty("File Path"))]
-    local fps = M.exact_fps(mp_item:GetClipProperty("FPS"))
+-- put the markers of a Media Pool clip's file on it; → added, failed (nil if it has no markup)
+local function mark(clip, data)
+    local markers = data[M.key(clip:GetClipProperty("File Path"))]
+    local fps = M.exact_fps(clip:GetClipProperty("FPS"))
     if not markers or not fps then return nil end
-    local frames = tonumber(mp_item:GetClipProperty("Frames") or "")
-    local shift = 0
-    if item ~= mp_item and M.TIMELINE_FRAMES == "item" then shift = math.floor(item:GetLeftOffset() or 0) end
-    clear(item)
+    local frames = tonumber(clip:GetClipProperty("Frames") or "")
+    clear(clip)
     local added, failed = 0, 0
     for _, m in ipairs(M.plan(markers, fps, frames)) do
-        if item:AddMarker(m[1] - shift, m[3], m[4], m[5], m[2], TAG) then added = added + 1 else failed = failed + 1 end
+        if clip:AddMarker(m[1], m[3], m[4], m[5], m[2], TAG) then added = added + 1 else failed = failed + 1 end
     end
     return added, failed
 end
@@ -107,13 +104,12 @@ end
 function M.run(resolve, mode, data, baked)
     local project = resolve:GetProjectManager():GetCurrentProject()
     if not project then print("camera_triage: no project is open"); return end
-    local timeline = project:GetCurrentTimeline()
-    local pool = {}
-    if mode ~= "timeline" then pool = media_pool_clips(project:GetMediaPool():GetRootFolder()) end
+    local pool = media_pool_clips(project:GetMediaPool():GetRootFolder())
 
     if mode == "remove" then
         local removed = 0
         for _, clip in ipairs(pool) do removed = removed + clear(clip) end
+        local timeline = project:GetCurrentTimeline()
         if timeline then
             for _, item in ipairs(timeline_items(timeline)) do
                 if item:GetMediaPoolItem() then removed = removed + clear(item) end   -- not titles, generators
@@ -123,39 +119,26 @@ function M.run(resolve, mode, data, baked)
         return
     end
 
-    local targets, where = {}, nil
-    if mode == "timeline" then
-        if not timeline then print("camera_triage: no timeline is open"); return end
-        for _, item in ipairs(timeline_items(timeline)) do
-            local mp = item:GetMediaPoolItem()
-            if mp then targets[#targets + 1] = { item, mp } end
-        end
-        where = 'timeline "' .. timeline:GetName() .. '"'
-    else
-        for _, clip in ipairs(pool) do targets[#targets + 1] = { clip, clip } end
-        where = "Media Pool"
-    end
-
     local done, markers, failed, skipped, seen = 0, 0, 0, {}, {}
-    for _, t in ipairs(targets) do
-        local added, bad = mark(t[1], t[2], data)
+    for _, clip in ipairs(pool) do
+        local added, bad = mark(clip, data)
         if added then
             done, markers, failed = done + 1, markers + added, failed + bad
         else
-            local name = t[1]:GetName()
+            local name = clip:GetName()
             if not seen[name] then seen[name] = true; skipped[#skipped + 1] = name end
         end
     end
-    print("camera_triage: " .. where .. " — " .. done .. " clip(s) marked, " .. markers .. " marker(s)"
+    print("camera_triage: Media Pool — " .. done .. " clip(s) marked, " .. markers .. " marker(s)"
         .. (failed > 0 and (", " .. failed .. " not accepted by Resolve") or "")
-        .. "  (markup baked " .. tostring(baked) .. ")")
+        .. "  (markup of " .. tostring(baked) .. ")")
     if #skipped > 0 then
         table.sort(skipped)
         local shown = {}
         for i = 1, math.min(10, #skipped) do shown[i] = skipped[i] end
         print("  without markup (" .. #skipped .. "): " .. table.concat(shown, ", ")
             .. (#skipped > 10 and (" and " .. (#skipped - 10) .. " more") or "")
-            .. " — run py tools\\resolve_markers.py <footage folder> again if they are marked")
+            .. " — if they are marked, run make_timeline.py or resolve_markers.py for their folder")
     end
 end
 

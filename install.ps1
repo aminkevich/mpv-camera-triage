@@ -23,8 +23,8 @@
       %APPDATA%\mpv\_backup_<date-time>\ (identical ones are left alone);
     - the old version of the script (gopro_triage.*) is moved there too, otherwise mpv loads
       both scripts and every key fires twice;
-    - if DaVinci Resolve is installed, a hint on tools\resolve_markers.py (markers on clips:
-      it writes the Workspace → Scripts → camera_triage entries together with the markers).
+    - if DaVinci Resolve is installed, a hint: tools\make_timeline.py writes its Workspace →
+      Scripts → camera_triage entries (Media Pool markers).
 
   HOW TO RUN
     Open PowerShell in the repository folder (Shift + right-click the folder →
@@ -121,12 +121,12 @@ Get-ChildItem -Path $src -Recurse -File | ForEach-Object {
     }
 }
 
-# DaVinci Resolve: markers on clips. Resolve runs menu scripts in a sandbox without file access,
-# so the menu scripts are written WITH the markers by tools\resolve_markers.py for given footage.
+# DaVinci Resolve: the Workspace → Scripts entries for Media Pool markers are written (with the
+# markers inside) by tools\make_timeline.py / tools\resolve_markers.py, not here.
 if (Test-Path (Join-Path $env:APPDATA "Blackmagic Design\DaVinci Resolve")) {
     Write-Host ""
-    Write-Host "DaVinci Resolve: for markers on clips run, per footage folder (and again after changing the markup):"
-    Write-Host "  py tools\resolve_markers.py <footage folder>"
+    Write-Host "DaVinci Resolve: make_timeline.py writes .otio timelines with clip markers and updates"
+    Write-Host "  Workspace → Scripts → camera_triage - media pool markers (restart Resolve once after the first run)"
 }
 
 Write-Host ""

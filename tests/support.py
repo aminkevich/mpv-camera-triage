@@ -79,9 +79,11 @@ def quiet():
         yield out
 
 
-def run_tool(script, *args, timeout=300):
+def run_tool(script, *args, timeout=300, extra_env=None):
     """Runs a script from tools/ as a separate process (as from the command line)."""
-    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    # never touch the real Resolve menu (make_timeline.py updates it); tests that need it set their own
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", CAMERA_TRIAGE_RESOLVE_SCRIPTS="none")
+    env.update(extra_env or {})
     return subprocess.run([sys.executable, str(TOOLS / script), *map(str, args)],
                           capture_output=True, text=True, encoding="utf-8", errors="replace",
                           env=env, timeout=timeout)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_timeline.py — _triage.csv markup → an editing timeline (FCPXML, DaVinci Resolve and others).
+make_timeline.py — _triage.csv markup → an editing timeline for DaVinci Resolve (OpenTimelineIO).
 
 Instead of physical cutting: the same segment plan as make_clips.py (same pads, merging,
 exclusions, --labels, --min-rating, make_clips.conf), but the output is a timeline file that
@@ -8,21 +8,22 @@ links to the ORIGINAL videos. In the editor any segment can be extended to the e
 source; the pads only set the initial width. Nothing is copied or re-encoded.
 
 For each footage folder, next to _triage.csv:
-  _selects.fcpxml  timeline "Selects <folder>": segments back to back (recording order, GoPro
-                   chapters in sequence); each carries markers — labels (name = label), i/o
-                   clips (a marker with a duration), notes at moments (text in the marker note).
-  _full.fcpxml     (--full) timeline "Full <folder>": every marked file in full, all markup
-                   as markers, including bad and notes for the file. An overview of all material.
+  _selects.otio  timeline "Selects <folder>": segments back to back (recording order, GoPro
+                 chapters in sequence). Each clip carries clip markers — labels (name = label),
+                 i/o clips (a marker with a duration), notes at moments (text in the marker
+                 note). Clip markers move with the clip when it is moved or trimmed.
+  _full.otio     (--full) timeline "Full <folder>": every marked file in full, all markup as
+                 markers, including bad and notes for the file. An overview of all material.
+  --fcpxml       also _selects.fcpxml (Final Cut Pro and other editors; markers inside) and
+                 _selects.edl (Resolve timeline markers, colored by label) — the older route.
 
-Next to each .fcpxml there is an .edl with the same name: timeline markers colored by label
-(fish blue, shot red, catch green, …). Resolve ignores markers in FCPXML, so markers are
-imported as a second step.
+Resolve: File → Import → Timeline… → choose the .otio. If the footage folder is moved later —
+Relink Media.
 
-Resolve:
-  1. File → Import → Timeline… → choose the .fcpxml. The videos go to the Media Pool in full.
-  2. Right-click this timeline in the Media Pool → Timelines → Import →
-     Timeline Markers from EDL… → choose the .edl with the same name.
-If the footage folder is moved later — Relink Media in Resolve.
+Markers on the clips in the Media Pool (so that clips put on any timeline later come with their
+markers): if Resolve is installed, every run also updates two Workspace → Scripts menu entries,
+"camera_triage - media pool markers" and "camera_triage - remove markers" (resolve_markers.py;
+Resolve runs menu scripts without file access, so the markers are written into the scripts).
 
 Requires ffprobe (frame rate, duration, source timecode): winget install Gyan.FFmpeg
 The timeline frame rate is the most common one among the sources, the start is 01:00:00:00.
@@ -46,16 +47,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import triage_plan as tp                    # noqa: E402  shared segment plan (as in make_clips.py)
 
-SELECTS_NAME = "_selects.fcpxml"
-FULL_NAME = "_full.fcpxml"
+SELECTS_STEM, FULL_STEM = "_selects", "_full"
 FCPXML_VERSION = "1.8"      # understood by Resolve 16+ and Final Cut Pro 10.4+
 
 
 def parse_args():
-    ap = argparse.ArgumentParser(description="_triage.csv markup → FCPXML timeline for editing")
+    ap = argparse.ArgumentParser(description="_triage.csv markup → OpenTimelineIO timeline for editing")
     tp.add_plan_args(ap)
     ap.add_argument("--full", action="store_true",
-                    help=f"also {FULL_NAME}: every marked file in full with all its markup")
+                    help=f"also {FULL_STEM}.otio: every marked file in full with all its markup")
+    ap.add_argument("--fcpxml", action="store_true",
+                    help="also .fcpxml (Final Cut Pro, other editors) and .edl (Resolve timeline markers)")
     ap.add_argument("--dry-run", action="store_true", help="only show what would go on the timeline")
     return tp.finish_args(ap, ap.parse_args())
 
@@ -308,6 +310,89 @@ def build_timeline(items, title, folder, out_path, full):
     return n, float(offset - tc_start), len(markers)
 
 
+# ---------------------------------------------------------------- OpenTimelineIO
+
+# Resolve marker colors → OTIO's marker colors (OTIO has fewer)
+OTIO_COLORS = {"Blue": "BLUE", "Red": "RED", "Green": "GREEN", "Yellow": "YELLOW", "Cyan": "CYAN",
+               "Sky": "CYAN", "Mint": "GREEN", "Pink": "PINK", "Rose": "PINK", "Purple": "PURPLE",
+               "Lavender": "PURPLE", "Fuchsia": "MAGENTA", "Cocoa": "ORANGE", "Lemon": "YELLOW",
+               "Cream": "WHITE", "Sand": "WHITE"}
+
+
+def otio_rt(value, rate):
+    return {"OTIO_SCHEMA": "RationalTime.1", "rate": float(rate), "value": float(value)}
+
+
+def otio_range(start, duration, rate):
+    return {"OTIO_SCHEMA": "TimeRange.1", "start_time": otio_rt(start, rate),
+            "duration": otio_rt(duration, rate)}
+
+
+def otio_clip(name, src, info, start, length, markers):
+    """A clip of src, frames start…start+length in the source's own time (its timecode)."""
+    fps = info["fps"]
+    return {"OTIO_SCHEMA": "Clip.2", "name": name, "metadata": {}, "enabled": True, "effects": [],
+            "source_range": otio_range(start, length, fps), "markers": markers,
+            "media_references": {"DEFAULT_MEDIA": {
+                "OTIO_SCHEMA": "ExternalReference.1", "name": src.name, "metadata": {},
+                "target_url": src.resolve().as_uri(),
+                "available_range": otio_range(info["tc0"], round(info["duration"] * fps), fps)}},
+            "active_media_reference_key": "DEFAULT_MEDIA"}
+
+
+def otio_track(name, kind, children):
+    return {"OTIO_SCHEMA": "Track.1", "name": name, "kind": kind, "metadata": {}, "enabled": True,
+            "effects": [], "markers": [], "source_range": None, "children": children}
+
+
+def build_otio(items, title, folder, out_path, full):
+    """items: [{fname, d, src, info, segs}] → OpenTimelineIO timeline with clip markers.
+    Clip markers are in the source's own time, like the clip's source_range (Resolve 21 reads
+    them so; counted from the clip's first frame they are ignored). → (segments, seconds, markers)"""
+    used = [it for it in items if it["info"]]
+    if not used:
+        return 0, 0, 0
+    seq_fps = Counter(it["info"]["fps"] for it in used).most_common(1)[0][0]
+    video, audio, n, total, nmarkers = [], [], 0, Fraction(0), 0
+    for it in used:
+        info, d, src, stem = it["info"], it["d"], it["src"], Path(it["fname"]).stem
+        fps, tc0 = info["fps"], info["tc0"]
+        last = round(info["duration"] * fps) if info["duration"] else None
+        for s, e, labs in it["segs"]:
+            sf = max(0, round(s * fps))
+            ef = round(e * fps) if last is None else min(round(e * fps), last)
+            if ef <= sf:
+                continue
+            name = (f"{stem}{stars(d['rating'])}" if full
+                    else f"{stem} {tp.hms(s)} {'+'.join(sorted(labs))}{stars(d['rating'])}")
+            markers = []
+            for t, dur, mname, note, color in sorted(segment_markers(d, s, e, with_file_notes=full),
+                                                     key=lambda m: m[0]):
+                mf = min(max(round(t * fps), sf), ef - 1)
+                length = min(max(1, round(dur * fps)) if dur else 1, ef - mf)
+                markers.append({"OTIO_SCHEMA": "Marker.2", "name": mname, "metadata": {},
+                                "color": OTIO_COLORS.get(color, "RED"), "comment": note or "",
+                                "marked_range": otio_range(tc0 + mf, length, fps)})
+            video.append(otio_clip(name, src, info, tc0 + sf, ef - sf, markers))
+            if info["audio"]:
+                audio.append(otio_clip(name, src, info, tc0 + sf, ef - sf, []))
+            else:                               # keeps the audio track in step with the video
+                audio.append({"OTIO_SCHEMA": "Gap.1", "name": "", "metadata": {}, "enabled": True,
+                              "effects": [], "markers": [], "source_range": otio_range(0, ef - sf, fps)})
+            n += 1
+            total += Fraction(ef - sf) / fps
+            nmarkers += len(markers)
+    tracks = [otio_track("Video 1", "Video", video)]
+    if any(c["OTIO_SCHEMA"] == "Clip.2" for c in audio):
+        tracks.append(otio_track("Audio 1", "Audio", audio))
+    timeline = {"OTIO_SCHEMA": "Timeline.1", "name": f"{title} {folder.name}", "metadata": {},
+                "global_start_time": otio_rt(3600 * round(seq_fps), seq_fps),     # 01:00:00:00
+                "tracks": {"OTIO_SCHEMA": "Stack.1", "name": "tracks", "metadata": {}, "enabled": True,
+                           "effects": [], "markers": [], "source_range": None, "children": tracks}}
+    out_path.write_text(json.dumps(timeline, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    return n, float(total), nmarkers
+
+
 # ---------------------------------------------------------------- folder
 
 def process_folder(csv_path, args):
@@ -357,19 +442,21 @@ def process_folder(csv_path, args):
               f"{shown}{more}")
     if args.dry_run:
         return True
-    for items, title, name, is_full in ((selects, "Selects", SELECTS_NAME, False),
-                                        (full, "Full", FULL_NAME, True)):
+    for items, title, stem, is_full in ((selects, "Selects", SELECTS_STEM, False),
+                                        (full, "Full", FULL_STEM, True)):
         if not items:
             continue
-        path = folder / name
+        path = folder / (stem + ".otio")
         try:
-            n, total, nm = build_timeline(items, title, folder, path, is_full)
+            n, total, nm = build_otio(items, title, folder, path, is_full)
+            if args.fcpxml:
+                build_timeline(items, title, folder, path.with_suffix(".fcpxml"), is_full)
         except OSError as e:
-            print(f"  ✗ {name} not written: {e}")
+            print(f"  ✗ {stem} not written: {e}")
             continue
         if n:
-            print(f"  → {path.name}: {n} segment(s), {tp.hms(total)};  "
-                  f"{path.with_suffix('.edl').name}: {nm} marker(s)")
+            print(f"  → {path.name}: {n} segment(s), {tp.hms(total)}, {nm} clip marker(s)"
+                  + (f";  {stem}.fcpxml + {stem}.edl" if args.fcpxml else ""))
     if not selects and not full:
         print("  (nothing to put on the timeline)")
     return True
@@ -386,11 +473,11 @@ def main():
         sys.exit(f"No {tp.CSV_NAME} found")
     for c in csvs:
         process_folder(c, args)
-    if not args.dry_run:
-        print("\nResolve:\n"
-              "  1. File → Import → Timeline… → choose the .fcpxml\n"
-              "  2. markers: right-click this timeline in the Media Pool → Timelines → Import →\n"
-              "     Timeline Markers from EDL… → choose the .edl with the same name")
+    if args.dry_run:
+        return
+    print("\nResolve: File → Import → Timeline… → choose the .otio (clip markers come with it)")
+    import resolve_markers                      # here: it imports this module itself
+    resolve_markers.update_menu(csvs)
 
 
 if __name__ == "__main__":
