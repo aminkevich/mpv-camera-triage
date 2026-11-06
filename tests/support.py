@@ -89,13 +89,14 @@ def run_tool(script, *args, timeout=300, extra_env=None):
                           env=env, timeout=timeout)
 
 
-def make_video(path, seconds, fps="60000/1001", timecode=None, size="160x90"):
-    """A tiny test video with audio (requires ffmpeg); a keyframe every second."""
+def make_video(path, seconds, fps="60000/1001", timecode=None, size="160x90", audio_extra=0):
+    """A tiny test video with audio (requires ffmpeg); a keyframe every second.
+    audio_extra: seconds the audio runs past the video (as on GoPro and DJI)."""
     cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
            "-f", "lavfi", "-i", f"testsrc2=d={seconds}:s={size}:r={fps}",
-           "-f", "lavfi", "-i", f"sine=d={seconds}:sample_rate=48000", "-ac", "2",
+           "-f", "lavfi", "-i", f"sine=d={seconds + audio_extra}:sample_rate=48000", "-ac", "2",
            "-c:v", "libx264", "-preset", "ultrafast", "-g", str(round(Fraction(fps))),
-           "-c:a", "aac", "-shortest"]
+           "-c:a", "aac"] + ([] if audio_extra else ["-shortest"])
     if timecode:
         cmd += ["-timecode", timecode]
     subprocess.run(cmd + [str(path)], check=True, capture_output=True)

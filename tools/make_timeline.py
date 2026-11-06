@@ -89,7 +89,7 @@ def probe(src):
     """Source parameters via ffprobe: fps, frame size, duration, timecode, audio."""
     cmd = ["ffprobe", "-v", "error",
            "-show_entries", "stream=codec_type,r_frame_rate,avg_frame_rate,width,height,channels,"
-           "sample_rate:stream_tags=timecode:format=duration:format_tags=timecode",
+           "sample_rate,duration:stream_tags=timecode:format=duration:format_tags=timecode",
            "-of", "json", str(src)]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
@@ -116,10 +116,17 @@ def probe(src):
     tc = ((fmt.get("tags") or {}).get("timecode")
           or next(((s.get("tags") or {}).get("timecode") for s in streams
                    if (s.get("tags") or {}).get("timecode")), None))
-    try:
-        duration = float(fmt.get("duration") or 0)
-    except ValueError:
-        duration = 0
+    # the video stream's own length: the file's (format) length is the longest stream — GoPro and
+    # DJI audio runs 1–2 frames past the video, and a clip reaching past the last video frame makes
+    # Resolve add the file to the Media Pool a second time, as audio only
+    duration = 0
+    for value in (video.get("duration"), fmt.get("duration")):
+        try:
+            duration = float(value or 0)
+        except ValueError:
+            duration = 0
+        if duration:
+            break
     return {"fps": fps, "width": int(video.get("width") or 0), "height": int(video.get("height") or 0),
             "duration": duration, "tc0": tc_frames(tc, fps) if tc else 0,
             "tc_format": "DF" if tc and re.search(r"[;.,]\d+$", tc) else "NDF",

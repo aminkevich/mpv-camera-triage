@@ -81,6 +81,26 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual([t["kind"] for t in tl["tracks"]["children"]], ["Video", "Audio"])
         self.assertTrue((self.folder / "_full.otio").exists())
 
+    def test_timeline_clips_end_at_the_last_video_frame(self):
+        """GoPro/DJI audio runs past the video: the file length is the audio's. A clip reaching past
+        the last video frame makes Resolve add the file again as audio only — so the video's length."""
+        import make_timeline as mt
+        folder = self.base / "LongAudio"
+        folder.mkdir()
+        video = make_video(folder / "GX010200.MP4", 4, audio_extra=0.1)
+        info = mt.probe(video)
+        self.assertEqual(round(info["duration"] * info["fps"]), round(4 * F(60000, 1001)))
+        triage_csv(folder, [row("mark", "GX010200.MP4", 3.8, label="fish")])     # the segment runs to the end
+        res = run_tool("make_timeline.py", folder, "--config", self.conf)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        tl = json.loads((folder / "_selects.otio").read_text(encoding="utf-8"))
+        for track in tl["tracks"]["children"]:
+            clip = track["children"][0]
+            sr, ar = clip["source_range"], clip["media_references"]["DEFAULT_MEDIA"]["available_range"]
+            self.assertEqual(ar["duration"]["value"], round(4 * F(60000, 1001)))
+            self.assertLessEqual(sr["start_time"]["value"] + sr["duration"]["value"],
+                                 ar["start_time"]["value"] + ar["duration"]["value"])
+
     def test_make_timeline_fcpxml_uses_source_timecode(self):
         res = run_tool("make_timeline.py", self.folder, "--config", self.conf, "--full", "--fcpxml")
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
