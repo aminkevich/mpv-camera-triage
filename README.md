@@ -82,7 +82,7 @@ py tools\make_timeline.py "D:\Footage\2026-09_Turkey" --min-rating 2
 py tools\make_timeline.py "D:\Footage\2026-09_Turkey" --full
 ```
 
-Next to `_triage.csv` you get `_selects.otio`: the selected segments back to back, as an OpenTimelineIO timeline. In Resolve: **File → Import → Timeline…** → `_selects.otio`. Every clip comes with its markers — labels, `i`/`o` clips with their duration, notes — as **clip markers**: they move with the clip when you move, trim or delete it.
+Next to `_triage.csv` you get `_selects.otio`: the selected segments back to back, as an OpenTimelineIO timeline. In Resolve: **File → Import → Timeline…** → `_selects.otio`. Every clip comes with its markers — labels, `i`/`o` clips with their duration, notes — as **clip markers**: they move with the clip when you move, trim or delete it. Each video clip is linked to its sound.
 
 The segments link to the original videos, so their edges can be dragged out to the start and end of the file: the pads only set the initial width. `--full` additionally writes `_full.otio` — every marked file in full with all its markup. The segment plan is the same as for cutting: the same options and `make_clips.conf`. `--fcpxml` also writes `_selects.fcpxml` (Final Cut Pro and other editors) with `_selects.edl` (Resolve timeline markers, the older route).
 

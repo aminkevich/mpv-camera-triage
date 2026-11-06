@@ -335,10 +335,12 @@ def otio_range(start, duration, rate):
             "duration": otio_rt(duration, rate)}
 
 
-def otio_clip(name, src, info, start, length, markers):
-    """A clip of src, frames start…start+length in the source's own time (its timecode)."""
+def otio_clip(name, src, info, start, length, markers, resolve_meta=None):
+    """A clip of src, frames start…start+length in the source's own time (its timecode).
+    resolve_meta: Resolve's own clip metadata (as in its OTIO export), e.g. the link group."""
     fps = info["fps"]
-    return {"OTIO_SCHEMA": "Clip.2", "name": name, "metadata": {}, "enabled": True, "effects": [],
+    meta = {"Resolve_OTIO": resolve_meta} if resolve_meta else {}
+    return {"OTIO_SCHEMA": "Clip.2", "name": name, "metadata": meta, "enabled": True, "effects": [],
             "source_range": otio_range(start, length, fps), "markers": markers,
             "media_references": {"DEFAULT_MEDIA": {
                 "OTIO_SCHEMA": "ExternalReference.1", "name": src.name, "metadata": {},
@@ -377,12 +379,18 @@ def build_otio(items, title, folder, out_path, full):
                                                      key=lambda m: m[0]):
                 mf = min(max(round(t * fps), sf), ef - 1)
                 length = min(max(1, round(dur * fps)) if dur else 1, ef - mf)
-                markers.append({"OTIO_SCHEMA": "Marker.2", "name": mname, "metadata": {},
+                # Resolve reads the marker text from its own metadata ("Note"), not from "comment"
+                markers.append({"OTIO_SCHEMA": "Marker.2", "name": mname,
+                                "metadata": {"Resolve_OTIO": {"Keywords": [], "Note": note or ""}},
                                 "color": OTIO_COLORS.get(color, "RED"), "comment": note or "",
                                 "marked_range": otio_range(tc0 + mf, length, fps)})
-            video.append(otio_clip(name, src, info, tc0 + sf, ef - sf, markers))
+            # the same "Link Group ID" on a video clip and its sound links them in Resolve:
+            # they move and trim together (as Resolve writes it in its own OTIO export)
+            link = {"Link Group ID": n + 1} if info["audio"] else None
+            video.append(otio_clip(name, src, info, tc0 + sf, ef - sf, markers, link))
             if info["audio"]:
-                audio.append(otio_clip(name, src, info, tc0 + sf, ef - sf, []))
+                channels = [{"Source Channel ID": i, "Source Track ID": 0} for i in range(info["audio"][0])]
+                audio.append(otio_clip(name, src, info, tc0 + sf, ef - sf, [], dict(link, Channels=channels)))
             else:                               # keeps the audio track in step with the video
                 audio.append({"OTIO_SCHEMA": "Gap.1", "name": "", "metadata": {}, "enabled": True,
                               "effects": [], "markers": [], "source_range": otio_range(0, ef - sf, fps)})

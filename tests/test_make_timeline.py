@@ -214,6 +214,14 @@ class TimelineTest(unittest.TestCase):
                          ["fish", "✎ Moray; «big one»", "shot", "clip dive", "bad", "jump"])
         note = gx["markers"][1]
         self.assertEqual((note["color"], note["comment"]), ("WHITE", "Moray; «big one»"))
+        self.assertEqual(note["metadata"]["Resolve_OTIO"]["Note"], "Moray; «big one»")   # Resolve reads this
+        # each video clip and its sound share a Link Group ID: linked in Resolve
+        audio = tl["tracks"]["children"][1]["children"]
+        links = [(v["metadata"]["Resolve_OTIO"]["Link Group ID"], a["metadata"]["Resolve_OTIO"]["Link Group ID"])
+                 for v, a in zip(video, audio)]
+        self.assertEqual(links, [(1, 1), (2, 2), (3, 3)])
+        self.assertEqual(len(audio[0]["metadata"]["Resolve_OTIO"]["Channels"]), 2)
+        self.assertEqual(audio[0]["markers"], [])
         dive = video[1]["markers"][0]
         self.assertEqual((dive["color"], dive["marked_range"]["duration"]["value"]), ("CYAN", round(15 * NTSC60)))
         dji = video[2]
@@ -230,7 +238,8 @@ class TimelineTest(unittest.TestCase):
         tl, _, _ = self.build_otio()
         audio = tl["tracks"]["children"][1]["children"]
         self.assertEqual([c["OTIO_SCHEMA"] for c in audio], ["Clip.2", "Clip.2", "Gap.1"])
-        self.check_otio(tl)
+        video = self.check_otio(tl)
+        self.assertEqual(video[2]["metadata"], {})                   # nothing to link with
 
 
 if __name__ == "__main__":
