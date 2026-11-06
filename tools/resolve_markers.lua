@@ -16,9 +16,17 @@ local TAG = "camera_triage"       -- customData of our markers: a rerun replaces
 M.TIMELINE_FRAMES = "source"
 
 local function list(t)
-    -- Resolve returns lists as tables {[1] = a, [2] = b, ...}
+    -- Resolve returns lists as tables {[1] = a, [2] = b, ...}, which may also hold other fields
+    -- (a number, e.g. a count): keep only the objects under numeric keys, in order
+    local pairs_ = {}
+    for k, v in pairs(t or {}) do
+        if type(k) == "number" and (type(v) == "userdata" or type(v) == "table") then
+            pairs_[#pairs_ + 1] = { k, v }
+        end
+    end
+    table.sort(pairs_, function(a, b) return a[1] < b[1] end)
     local out = {}
-    for _, v in pairs(t or {}) do out[#out + 1] = v end
+    for i, kv in ipairs(pairs_) do out[i] = kv[2] end
     return out
 end
 
@@ -100,7 +108,8 @@ function M.run(resolve, mode, data, baked)
     local project = resolve:GetProjectManager():GetCurrentProject()
     if not project then print("camera_triage: no project is open"); return end
     local timeline = project:GetCurrentTimeline()
-    local pool = media_pool_clips(project:GetMediaPool():GetRootFolder())
+    local pool = {}
+    if mode ~= "timeline" then pool = media_pool_clips(project:GetMediaPool():GetRootFolder()) end
 
     if mode == "remove" then
         local removed = 0

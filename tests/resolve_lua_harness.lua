@@ -39,16 +39,25 @@ local other = clip("C0001.MP4", 25, 500)
 local title = { GetName = function() return "Title" end, GetMediaPoolItem = function() return nil end }
 gopro:AddMarker(100, "Green", "my own", "", 1, nil)              -- placed by hand: must stay
 
+-- Resolve's lists are tables {[1] = a, [2] = b, ...} that may hold other fields (numbers) too
+local function resolve_list(...)
+    local t = { ... }
+    t.n = #t
+    return t
+end
+
 local timeline = {
     GetName = function() return "Selects Turkey" end,
     GetTrackCount = function(_, kind) return kind == "video" and 2 or 0 end,
     GetItemListInTrack = function(_, _, i)
-        if i == 1 then return { [1] = gopro, [2] = other, [3] = title } end
-        return { [1] = proxy }
+        if i == 1 then return resolve_list(gopro, other, title) end
+        return resolve_list(proxy)
     end,
 }
-local root = { GetClipList = function() return { [1] = gopro, [2] = proxy } end,
-               GetSubFolderList = function() return {} end }
+local day2 = { GetClipList = function() return resolve_list(proxy) end,
+               GetSubFolderList = function() return resolve_list() end }
+local root = { GetClipList = function() return resolve_list(gopro) end,
+               GetSubFolderList = function() return resolve_list(day2) end }
 local project = { GetCurrentTimeline = function() return timeline end,
                   GetMediaPool = function() return { GetRootFolder = function() return root end } end }
 resolve = { GetProjectManager = function() return { GetCurrentProject = function() return project end } end }
